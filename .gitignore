@@ -1,0 +1,24 @@
+# PyInstaller 构建产物
+dist/
+build/
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+
+# 虚拟环境
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# 测试文件
+test_sample.txt
+test_gbk.txt
+
+# 系统
+Thumbs.db
+.DS_Store
