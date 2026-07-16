@@ -693,13 +693,21 @@ class ReaderWindow(QWidget):
                 cursor.movePosition(QTextCursor.MoveOperation.End)
                 cursor.insertText(text)
 
-        # 恢复滚动位置
-        if vbar and target_scroll > 0:
-            vbar.setValue(min(target_scroll, vbar.maximum()))
+        # 恢复滚动位置（延迟等文字排版完成）
+        if target_scroll > 0:
+            QTimer.singleShot(100, lambda: self._restore_scroll(target_scroll))
 
         info = get_file_info(last_file)
         self.setWindowTitle(f"浮光 — {info['name']}")
         self._save_timer.start()
+
+    def _restore_scroll(self, target: int) -> None:
+        """延迟恢复滚动位置（等 QTextEdit 完成排版后调用）。"""
+        if self._text_widget is None:
+            return
+        vbar = self._text_widget.verticalScrollBar()
+        if vbar is not None:
+            vbar.setValue(min(target, vbar.maximum()))
 
     # ------------------------------------------------------------------
     # 外观设置
