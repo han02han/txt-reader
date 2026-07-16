@@ -22,6 +22,7 @@ from PySide6.QtGui import (
     QMouseEvent,
     QPainter,
     QPixmap,
+    QTextCursor,
     QWheelEvent,
 )
 from PySide6.QtWidgets import (
@@ -394,9 +395,7 @@ class ReaderWindow(QWidget):
 
             if self._text_widget is not None:
                 self._text_widget.setPlainText(text)
-                self._text_widget.moveCursor(
-                    self._text_widget.textCursor().Start
-                )
+                self._text_widget.moveCursor(QTextCursor.MoveOperation.Start)
 
             info = get_file_info(file_path)
             self.setWindowTitle(f"浮光 — {info['name']}")
@@ -422,7 +421,7 @@ class ReaderWindow(QWidget):
             )
             if self._text_widget and text:
                 cursor = self._text_widget.textCursor()
-                cursor.movePosition(cursor.MoveOperation.End)
+                cursor.movePosition(QTextCursor.MoveOperation.End)
                 cursor.insertText(text)
         except Exception:
             pass
