@@ -6,6 +6,10 @@
 - 支持 Ctrl+拖动文本区域来移动窗口
 """
 
+import json
+import os as _os
+import sys as _sys
+
 from text_loader import get_file_info, load_file_chunked
 from PySide6.QtCore import (
     QEasingCurve,
@@ -65,6 +69,28 @@ _LIGHT_THEME = {
     "selection_bg": "rgba(0, 0, 0, 30)",
     "placeholder_color": "rgba(0, 0, 0, 100)",
 }
+# 状态文件路径（exe 同目录）
+
+
+def _state_path() -> str:
+    """获取状态 JSON 文件路径。"""
+    exe_dir = _os.path.dirname(_sys.executable) if getattr(_sys, 'frozen', False) else _os.path.dirname(_os.path.abspath(__file__))
+    return _os.path.join(exe_dir, "fuguo_state.json")
+
+
+def _load_state() -> dict:
+    try:
+        with open(_state_path(), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_state(data: dict) -> None:
+    with open(_state_path(), "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
 # 可选字体列表
 _FONT_OPTIONS = [
     "Microsoft YaHei",
@@ -608,28 +634,28 @@ class ReaderWindow(QWidget):
     # ------------------------------------------------------------------
 
     def _save_reading_state(self) -> None:
-        """保存当前文件路径和滚动位置。"""
+        """保存当前文件路径和滚动位置到 JSON 文件。"""
         if not self._file_path or self._text_widget is None:
             return
         vbar = self._text_widget.verticalScrollBar()
         if vbar is None:
             return
-        s = QSettings("浮光", "浮光")
-        s.setValue("reading/last_file", self._file_path)
-        s.setValue("reading/scroll_pos", vbar.value())
-        s.setValue("reading/loaded_offset", self._current_offset)
+        _save_state({
+            "last_file": self._file_path,
+            "scroll_pos": vbar.value(),
+            "loaded_offset": self._current_offset,
+        })
 
     def _restore_reading_state(self) -> None:
-        """恢复上次阅读的文件和滚动位置。"""
-        import os
-        s = QSettings("浮光", "浮光")
-        last_file = s.value("reading/last_file")
+        """从 JSON 文件恢复上次阅读的文件和滚动位置。"""
+        data = _load_state()
+        last_file = data.get("last_file")
         if not last_file:
             return
-        if not os.path.exists(last_file):
+        if not _os.path.exists(last_file):
             return  # 文件已删除或移动，跳过
 
-        target_scroll = s.value("reading/scroll_pos", 0, type=int)
+        target_scroll = data.get("scroll_pos", 0)
         try:
             self._file_path = last_file
             self._current_offset = 0
@@ -657,6 +683,7 @@ class ReaderWindow(QWidget):
 
             info = get_file_info(last_file)
             self.setWindowTitle(f"浮光 — {info['name']}")
+            self._save_timer.start()  # 恢复后启动自动保存
         except Exception:
             pass  # 恢复失败不影响正常使用
 
