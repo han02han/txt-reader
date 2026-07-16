@@ -281,7 +281,7 @@ class ReaderWindow(QWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        """移动鼠标 — 缩放中 / 拖动中 / 更新光标形状。"""
+        """移动鼠标 — 缩放中 / 拖动中。"""
         if self._resizing:
             delta = event.globalPosition().toPoint() - self._resize_start_pos
             geo = QRect(self._resize_start_geo)
@@ -293,19 +293,6 @@ class ReaderWindow(QWidget):
             return
 
         self._do_drag(event)
-
-        # 更新鼠标光标提示
-        if self._drag_pos is None:
-            edge = self._get_resize_edge(event.position().toPoint())
-            if edge == "right":
-                self.setCursor(Qt.CursorShape.SizeHorCursor)
-            elif edge == "bottom":
-                self.setCursor(Qt.CursorShape.SizeVerCursor)
-            elif edge == "bottomright":
-                self.setCursor(Qt.CursorShape.SizeFDiagCursor)
-            else:
-                self.setCursor(Qt.CursorShape.ArrowCursor)
-
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
@@ -353,17 +340,15 @@ class ReaderWindow(QWidget):
                 if self._drag_pos is not None:
                     self._do_drag(event)
                     return True
-                # 更新光标
+                # 靠近边缘时显示缩放光标（设在容器上，不影响窗口事件）
                 local = obj.mapTo(self, event.position().toPoint())
                 edge = self._get_resize_edge(local)
-                if edge == "right":
-                    self.setCursor(Qt.CursorShape.SizeHorCursor)
-                elif edge == "bottom":
-                    self.setCursor(Qt.CursorShape.SizeVerCursor)
-                elif edge == "bottomright":
-                    self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+                if edge:
+                    obj.setCursor(Qt.CursorShape.SizeFDiagCursor if edge == "bottomright"
+                                  else Qt.CursorShape.SizeHorCursor if edge == "right"
+                                  else Qt.CursorShape.SizeVerCursor)
                 else:
-                    self.setCursor(Qt.CursorShape.ArrowCursor)
+                    obj.unsetCursor()  # 恢复默认，让文本区显示 I 型光标
 
             elif event.type() == QEvent.Type.MouseButtonRelease:
                 if self._resizing:
