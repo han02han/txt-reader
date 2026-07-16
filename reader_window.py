@@ -403,8 +403,6 @@ class ReaderWindow(QWidget):
 
             if not self.isVisible():
                 self.show()
-                if self._opacity_effect is not None:
-                    self._opacity_effect.setOpacity(1.0)
 
         except Exception as e:
             if self._text_widget is not None:
@@ -437,7 +435,10 @@ class ReaderWindow(QWidget):
         """窗口已显示，通知托盘，延迟更新主题。"""
         super().showEvent(event)
         self.visibility_changed.emit(True)
-        # 窗口出现后再采样桌面背景，避免 grabWindow 阻塞显示
+        # 显示时确保内容可见（初始透明度为 0）
+        if self._opacity_effect is not None:
+            self._opacity_effect.setOpacity(1.0)
+        # 窗口出现后再采样桌面背景，避免阻塞显示
         QTimer.singleShot(300, self._update_theme)
 
     def hideEvent(self, event) -> None:
