@@ -309,6 +309,7 @@ class ReaderWindow(QWidget):
 
             if not self.isVisible():
                 self.show()
+                self._fade_to(1.0)  # 打开文件时直接显示，避免用户找不到窗口
 
         except Exception as e:
             if self._text_widget is not None:
