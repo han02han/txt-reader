@@ -565,12 +565,11 @@ class ReaderWindow(QWidget):
 
     def closeEvent(self, event) -> None:
         """关闭窗口时隐藏而非退出，由托盘控制真正退出。"""
-        self._save_reading_state()
-        self._save_timer.stop()
         if self._quitting:
-            self._save_geometry()
             event.accept()
             return
+        self._save_reading_state()
+        self._save_timer.stop()
         self._save_geometry()
         self.hide()
         self.hide_requested.emit()
@@ -578,6 +577,8 @@ class ReaderWindow(QWidget):
 
     def really_close(self) -> None:
         """真正关闭窗口（程序退出时由 main 调用）。"""
+        self._save_reading_state()
+        self._save_geometry()
         self._quitting = True
         self.close()
 
