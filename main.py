@@ -46,6 +46,7 @@ class App:
         if self._window.isVisible():
             self._window.hide()
         else:
+            self._window._update_theme()  # 显示前采样桌面背景
             self._window.show()
 
     def _on_window_hidden(self) -> None:

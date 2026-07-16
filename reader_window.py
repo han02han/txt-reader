@@ -401,8 +401,11 @@ class ReaderWindow(QWidget):
             self.setWindowTitle(f"浮光 — {info['name']}")
 
             if not self.isVisible():
+                self._update_theme()       # 窗口未显示时采样桌面背景
                 self.show()
-                self._fade_to(1.0)  # 打开文件时直接显示，避免用户找不到窗口
+                # 直接设透明度，跳过动画，避免 setStyleSheet 干扰动画
+                if self._opacity_effect is not None:
+                    self._opacity_effect.setOpacity(1.0)
 
         except Exception as e:
             if self._text_widget is not None:
@@ -430,11 +433,6 @@ class ReaderWindow(QWidget):
     # ------------------------------------------------------------------
     # 窗口关闭 → 隐藏到托盘
     # ------------------------------------------------------------------
-
-    def show(self) -> None:
-        """显示窗口 — 先采样背景再出现，避免自捕获。"""
-        self._update_theme()
-        super().show()
 
     def showEvent(self, event) -> None:
         """窗口已显示，通知托盘。"""
