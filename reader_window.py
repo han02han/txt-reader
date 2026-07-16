@@ -37,8 +37,8 @@ from PySide6.QtWidgets import (
 # 淡入淡出动画时长（毫秒）
 FADE_DURATION = 250
 # 默认窗口大小
-DEFAULT_WIDTH = 800
-DEFAULT_HEIGHT = 600
+DEFAULT_WIDTH = 450
+DEFAULT_HEIGHT = 350
 # 大文件分块大小（字符）
 CHUNK_SIZE = 50000
 # 背景亮度阈值（0-255），高于此值视为亮背景
@@ -156,7 +156,7 @@ class ReaderWindow(QWidget):
         """)
 
         inner = QHBoxLayout(self._container)
-        inner.setContentsMargins(24, 18, 24, 18)
+        inner.setContentsMargins(14, 10, 14, 10)
 
         # 自定义文本编辑区
         self._text_widget = _ReaderTextEdit(self._container)
@@ -208,9 +208,9 @@ class ReaderWindow(QWidget):
         self._fade_to(1.0)
 
     def leaveEvent(self, event) -> None:
-        """鼠标离开窗口 → 文字淡出。"""
+        """鼠标离开窗口 → 文字淡出到几乎不可见（但保留鼠标事件响应）。"""
         super().leaveEvent(event)
-        self._fade_to(0.0)
+        self._fade_to(0.01)  # 不能到 0.0，否则 WA_TranslucentBackground 会让鼠标穿透
 
     def _fade_to(self, target: float) -> None:
         """平滑过渡到目标透明度。"""
@@ -352,8 +352,8 @@ class ReaderWindow(QWidget):
                     background: transparent;
                     color: {t['text_color']};
                     font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
-                    font-size: 16px;
-                    line-height: 1.6;
+                    font-size: 14px;
+                    line-height: 1.5;
                     selection-background-color: {t['selection_bg']};
                 }}
                 QScrollBar {{ width: 0; height: 0; }}
