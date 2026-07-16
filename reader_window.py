@@ -15,7 +15,14 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QMouseEvent, QWheelEvent
+from PySide6.QtGui import (
+    QDragEnterEvent,
+    QDropEvent,
+    QMouseEvent,
+    QPainter,
+    QPixmap,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsOpacityEffect,
@@ -32,6 +39,21 @@ DEFAULT_WIDTH = 800
 DEFAULT_HEIGHT = 600
 # 大文件分块大小（字符）
 CHUNK_SIZE = 50000
+# 背景亮度阈值（0-255），高于此值视为亮背景
+BRIGHTNESS_THRESHOLD = 128
+# 主题颜色预设
+_DARK_THEME = {
+    "container_bg": "rgba(0, 0, 0, 60)",
+    "text_color": "rgba(255, 255, 255, 230)",
+    "selection_bg": "rgba(255, 255, 255, 60)",
+    "placeholder_color": "rgba(255, 255, 255, 100)",
+}
+_LIGHT_THEME = {
+    "container_bg": "rgba(255, 255, 255, 60)",
+    "text_color": "rgba(0, 0, 0, 220)",
+    "selection_bg": "rgba(0, 0, 0, 30)",
+    "placeholder_color": "rgba(0, 0, 0, 100)",
+}
 
 
 class _ReaderTextEdit(QTextEdit):
@@ -77,8 +99,9 @@ class _ReaderTextEdit(QTextEdit):
 class ReaderWindow(QWidget):
     """透明阅读器主窗口。"""
 
-    # 信号：窗口被"关闭"（实际是隐藏）时发出
-    hide_requested = Signal()
+    # 信号
+    hide_requested = Signal()          # 窗口被"关闭"（实际是隐藏）时发出
+    visibility_changed = Signal(bool)  # 窗口显示/隐藏状态变化
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -88,7 +111,9 @@ class ReaderWindow(QWidget):
         self._current_offset: int = 0
         self._has_more: bool = False
         self._quitting: bool = False
+        self._is_light_bg: bool = False
         self._text_widget: _ReaderTextEdit | None = None
+        self._container: QFrame | None = None
         self._opacity_effect: QGraphicsOpacityEffect | None = None
         self._fade_anim: QPropertyAnimation | None = None
 
@@ -119,21 +144,20 @@ class ReaderWindow(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
 
-        # 中央容器 — 深色半透明底衬，保证文字在任何背景下可读
-        container = QFrame(self)
-        container.setObjectName("textContainer")
-        container.setStyleSheet("""
+        # 中央容器 — 半透明底衬，保证文字在任何背景下可读
+        self._container = QFrame(self)
+        self._container.setObjectName("textContainer")
+        self._container.setStyleSheet("""
             #textContainer {
-                background-color: rgba(0, 0, 0, 60);
                 border-radius: 12px;
             }
         """)
 
-        inner = QHBoxLayout(container)
+        inner = QHBoxLayout(self._container)
         inner.setContentsMargins(24, 18, 24, 18)
 
         # 自定义文本编辑区
-        self._text_widget = _ReaderTextEdit(container)
+        self._text_widget = _ReaderTextEdit(self._container)
         self._text_widget.setReadOnly(True)
         self._text_widget.setFrameShape(QFrame.Shape.NoFrame)
         self._text_widget.setVerticalScrollBarPolicy(
@@ -142,32 +166,21 @@ class ReaderWindow(QWidget):
         self._text_widget.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
-        self._text_widget.setStyleSheet("""
-            QTextEdit {
-                background: transparent;
-                color: rgba(255, 255, 255, 230);
-                font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
-                font-size: 16px;
-                line-height: 1.6;
-                selection-background-color: rgba(255, 255, 255, 60);
-            }
-            QScrollBar { width: 0; height: 0; }
-        """)
 
         # 连接自定义信号
         self._text_widget.near_bottom.connect(self._load_more)
         self._text_widget.drag_requested.connect(self._on_edit_drag)
 
         inner.addWidget(self._text_widget)
-        root.addWidget(container)
+        root.addWidget(self._container)
 
         # 容器边距区域也可用于拖动窗口
-        container.installEventFilter(self)
+        self._container.installEventFilter(self)
 
         # 透明度效果 — 仅作用于文字容器
-        self._opacity_effect = QGraphicsOpacityEffect(container)
+        self._opacity_effect = QGraphicsOpacityEffect(self._container)
         self._opacity_effect.setOpacity(0.0)  # 初始隐藏
-        container.setGraphicsEffect(self._opacity_effect)
+        self._container.setGraphicsEffect(self._opacity_effect)
 
         # 淡入淡出动画
         self._fade_anim = QPropertyAnimation(self._opacity_effect, b"opacity")
@@ -179,6 +192,9 @@ class ReaderWindow(QWidget):
             "拖放 TXT 文件到此处\n或通过系统托盘菜单打开文件\n\n"
             "按住 Ctrl 拖动鼠标可移动窗口"
         )
+
+        # 应用默认主题（后续由 _update_theme 动态调整）
+        self._apply_theme()
 
     # ------------------------------------------------------------------
     # 鼠标感知 — 淡入淡出
@@ -228,6 +244,7 @@ class ReaderWindow(QWidget):
             self._do_drag(event)
         elif event.type() == event.Type.MouseButtonRelease:
             self._end_drag()
+            self._update_theme()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """在窗口空白区域按下鼠标 → 开始拖动。"""
@@ -242,6 +259,7 @@ class ReaderWindow(QWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         self._end_drag()
+        self._update_theme()  # 窗口可能移到了不同背景上
         super().mouseReleaseEvent(event)
 
     def eventFilter(self, obj, event) -> bool:
@@ -263,6 +281,66 @@ class ReaderWindow(QWidget):
                     self._end_drag()
                     return True
         return super().eventFilter(obj, event)
+
+    # ------------------------------------------------------------------
+    # 背景感知主题切换
+    # ------------------------------------------------------------------
+
+    def _update_theme(self) -> None:
+        """采样窗口下方桌面背景亮度，自动切换明暗主题。"""
+        screen = self.screen()
+        if screen is None:
+            return
+
+        geo = self.geometry()
+        # 采样窗口中心 60×60 区域
+        sample_size = 60
+        sx = max(0, geo.x() + (geo.width() - sample_size) // 2)
+        sy = max(0, geo.y() + (geo.height() - sample_size) // 2)
+
+        pixmap = screen.grabWindow(0, sx, sy, sample_size, sample_size)
+        img = pixmap.toImage()
+
+        # 每隔 2 像素采样一次，减少计算量
+        total, count = 0, 0
+        for py in range(0, img.height(), 2):
+            for px in range(0, img.width(), 2):
+                color = img.pixelColor(px, py)
+                # 感知亮度公式
+                total += 0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()
+                count += 1
+
+        avg = total / max(count, 1)
+        light = avg > BRIGHTNESS_THRESHOLD
+
+        if light != self._is_light_bg:
+            self._is_light_bg = light
+            self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        """根据当前背景亮度应用对应的文字与容器颜色。"""
+        t = _LIGHT_THEME if self._is_light_bg else _DARK_THEME
+
+        if self._container is not None:
+            self._container.setStyleSheet(f"""
+                #textContainer {{
+                    background-color: {t['container_bg']};
+                    border-radius: 12px;
+                }}
+            """)
+
+        if self._text_widget is not None:
+            self._text_widget.setStyleSheet(f"""
+                QTextEdit {{
+                    background: transparent;
+                    color: {t['text_color']};
+                    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+                    font-size: 16px;
+                    line-height: 1.6;
+                    selection-background-color: {t['selection_bg']};
+                }}
+                QScrollBar {{ width: 0; height: 0; }}
+            """)
 
     # ------------------------------------------------------------------
     # 拖放 TXT 文件
@@ -338,15 +416,23 @@ class ReaderWindow(QWidget):
     # 窗口关闭 → 隐藏到托盘
     # ------------------------------------------------------------------
 
+    def showEvent(self, event) -> None:
+        """窗口显示时更新主题并通知托盘。"""
+        super().showEvent(event)
+        self._update_theme()
+        self.visibility_changed.emit(True)
+
     def closeEvent(self, event) -> None:
         """关闭窗口时隐藏而非退出，由托盘控制真正退出。"""
         if self._quitting:
             self._save_geometry()
+            self.visibility_changed.emit(False)
             event.accept()
             return
         self._save_geometry()
         self.hide()
         self.hide_requested.emit()
+        self.visibility_changed.emit(False)
         event.ignore()
 
     def really_close(self) -> None:

@@ -29,6 +29,9 @@ class App:
         # 窗口关闭 → 隐藏到托盘
         self._window.hide_requested.connect(self._on_window_hidden)
 
+        # 窗口可见性变化 → 托盘菜单同步
+        self._window.visibility_changed.connect(self._tray.set_window_visible)
+
         # 托盘操作
         self._tray.toggle_window.connect(self._on_toggle_visibility)
         self._tray.open_file_requested.connect(self._window.open_file)

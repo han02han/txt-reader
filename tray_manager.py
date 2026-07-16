@@ -46,13 +46,15 @@ class TrayManager(QSystemTrayIcon):
     def __init__(self, parent=None):
         super().__init__(parent)
 
+        self._window_visible: bool = False
+
         self.setIcon(_make_tray_icon())
         self.setToolTip("浮光")
 
         # 右键菜单
         self._menu = QMenu()
 
-        self._toggle_action = QAction("显示/隐藏")
+        self._toggle_action = QAction("显示")
         self._toggle_action.triggered.connect(self._on_toggle)
         self._menu.addAction(self._toggle_action)
 
@@ -69,6 +71,9 @@ class TrayManager(QSystemTrayIcon):
         self._menu.addAction(self._quit_action)
 
         self.setContextMenu(self._menu)
+
+        # 菜单弹出前刷新文字，确保状态同步
+        self._menu.aboutToShow.connect(self._refresh_toggle_text)
 
         # 左键点击 = 切换显示/隐藏
         self.activated.connect(self._on_activated)
@@ -102,3 +107,18 @@ class TrayManager(QSystemTrayIcon):
     def _on_quit(self) -> None:
         """退出应用。"""
         self.quit_app.emit()
+
+    # ------------------------------------------------------------------
+    # 菜单文字同步
+    # ------------------------------------------------------------------
+
+    def set_window_visible(self, visible: bool) -> None:
+        """由外部通知窗口可见性变化，用于同步菜单文字。"""
+        self._window_visible = visible
+
+    def _refresh_toggle_text(self) -> None:
+        """菜单弹出前刷新切换按钮文字，反映当前状态。"""
+        if self._window_visible:
+            self._toggle_action.setText("隐藏")
+        else:
+            self._toggle_action.setText("显示")
