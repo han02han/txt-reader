@@ -49,8 +49,8 @@ BRIGHTNESS_THRESHOLD = 128
 # 主题颜色预设
 _DARK_THEME = {
     "container_bg": "rgba(0, 0, 0, 60)",
-    "text_color": "rgba(255, 255, 255, 230)",
-    "selection_bg": "rgba(255, 255, 255, 60)",
+    "text_color": "rgba(255, 255, 255, 180)",
+    "selection_bg": "rgba(255, 255, 255, 40)",
     "placeholder_color": "rgba(255, 255, 255, 100)",
 }
 _LIGHT_THEME = {
