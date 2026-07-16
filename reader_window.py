@@ -138,6 +138,7 @@ class ReaderWindow(QWidget):
         # 从设置中读取或使用默认值
         s = QSettings("浮光", "浮光")
         self._font_family: str = s.value("appearance/font", "Microsoft YaHei")
+        self._font_size: int = s.value("appearance/font_size", 14, type=int)
         self._text_alpha: int = s.value("appearance/alpha", 180, type=int)
         self._text_widget: _ReaderTextEdit | None = None
         self._container: QFrame | None = None
@@ -464,7 +465,7 @@ class ReaderWindow(QWidget):
                     background: transparent;
                     color: rgba({base_color}, {self._text_alpha});
                     font-family: "{self._font_family}", "Microsoft YaHei", sans-serif;
-                    font-size: 14px;
+                    font-size: {self._font_size}px;
                     line-height: 1.5;
                     selection-background-color: {t['selection_bg']};
                 }}
@@ -664,11 +665,12 @@ class ReaderWindow(QWidget):
 
     def show_settings(self) -> None:
         """弹出外观设置对话框。"""
-        dlg = _SettingsDialog(self._font_family, self._text_alpha, self)
+        dlg = _SettingsDialog(self._font_family, self._font_size, self._text_alpha, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._font_family, self._text_alpha = dlg.values()
+            self._font_family, self._font_size, self._text_alpha = dlg.values()
             s = QSettings("浮光", "浮光")
             s.setValue("appearance/font", self._font_family)
+            s.setValue("appearance/font_size", self._font_size)
             s.setValue("appearance/alpha", self._text_alpha)
             self._apply_theme()
 
@@ -676,10 +678,10 @@ class ReaderWindow(QWidget):
 class _SettingsDialog(QDialog):
     """字体与文字透明度设置对话框。"""
 
-    def __init__(self, current_font: str, current_alpha: int, parent=None):
+    def __init__(self, current_font: str, current_size: int, current_alpha: int, parent=None):
         super().__init__(parent)
         self.setWindowTitle("外观设置")
-        self.resize(320, 180)
+        self.resize(340, 200)
         self.setWindowFlags(
             Qt.WindowType.Dialog
             | Qt.WindowType.WindowCloseButtonHint
@@ -697,12 +699,25 @@ class _SettingsDialog(QDialog):
             self._font_combo.setCurrentIndex(idx)
         layout.addRow("字体:", self._font_combo)
 
+        # 字号滑块 (10-24)
+        self._size_slider = QSlider(Qt.Orientation.Horizontal)
+        self._size_slider.setRange(10, 24)
+        self._size_slider.setValue(current_size)
+        self._size_label = QLabel(str(current_size))
+        self._size_slider.valueChanged.connect(
+            lambda v: self._size_label.setText(str(v))
+        )
+        size_row = QHBoxLayout()
+        size_row.addWidget(QLabel("小"))
+        size_row.addWidget(self._size_slider)
+        size_row.addWidget(QLabel("大"))
+        size_row.addWidget(self._size_label)
+        layout.addRow("字号:", size_row)
+
         # 透明度滑块 (alpha 120-240)
         self._alpha_slider = QSlider(Qt.Orientation.Horizontal)
         self._alpha_slider.setRange(120, 240)
         self._alpha_slider.setValue(current_alpha)
-        self._alpha_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self._alpha_slider.setTickInterval(20)
         self._alpha_value_label = QLabel(str(current_alpha))
         self._alpha_slider.valueChanged.connect(
             lambda v: self._alpha_value_label.setText(str(v))
@@ -724,6 +739,6 @@ class _SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
 
-    def values(self) -> tuple[str, int]:
-        """返回 (font_family, alpha)。"""
-        return self._font_combo.currentText(), self._alpha_slider.value()
+    def values(self) -> tuple[str, int, int]:
+        """返回 (font_family, font_size, alpha)。"""
+        return self._font_combo.currentText(), self._size_slider.value(), self._alpha_slider.value()
