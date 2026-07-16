@@ -11,6 +11,7 @@ from PySide6.QtCore import (
     QEasingCurve,
     QPoint,
     QPropertyAnimation,
+    QRect,
     QSettings,
     Qt,
     QTimer,
@@ -41,6 +42,8 @@ DEFAULT_WIDTH = 450
 DEFAULT_HEIGHT = 350
 # 大文件分块大小（字符）
 CHUNK_SIZE = 50000
+# 窗口边缘缩放检测范围（像素）
+EDGE_MARGIN = 8
 # 背景亮度阈值（0-255），高于此值视为亮背景
 BRIGHTNESS_THRESHOLD = 128
 # 主题颜色预设
@@ -109,6 +112,9 @@ class ReaderWindow(QWidget):
         super().__init__(parent)
 
         self._drag_pos: QPoint | None = None
+        self._resizing: str | None = None        # 当前缩放边：'right','bottom','bottomright'
+        self._resize_start_geo: QRect | None = None
+        self._resize_start_pos: QPoint | None = None
         self._file_path: str | None = None
         self._current_offset: int = 0
         self._has_more: bool = False
@@ -222,8 +228,22 @@ class ReaderWindow(QWidget):
         self._fade_anim.start()
 
     # ------------------------------------------------------------------
-    # 窗口拖动（无边框替代方案）
+    # 窗口拖动 + 边缘缩放（无边框替代方案）
     # ------------------------------------------------------------------
+
+    def _get_resize_edge(self, pos: QPoint) -> str | None:
+        """判断鼠标是否靠近窗口边缘，返回缩放方向。"""
+        w, h = self.width(), self.height()
+        right = pos.x() >= w - EDGE_MARGIN
+        bottom = pos.y() >= h - EDGE_MARGIN
+
+        if right and bottom:
+            return "bottomright"
+        elif right:
+            return "right"
+        elif bottom:
+            return "bottom"
+        return None
 
     def _begin_drag(self, event: QMouseEvent) -> None:
         """记录拖动起点。"""
@@ -249,19 +269,53 @@ class ReaderWindow(QWidget):
             self._update_theme()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """在窗口空白区域按下鼠标 → 开始拖动。"""
+        """按下鼠标 — 靠近边缘则缩放，否则拖动窗口。"""
         if event.button() == Qt.MouseButton.LeftButton:
+            edge = self._get_resize_edge(event.position().toPoint())
+            if edge:
+                self._resizing = edge
+                self._resize_start_geo = self.geometry()
+                self._resize_start_pos = event.globalPosition().toPoint()
+                return
             self._begin_drag(event)
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        """拖动窗口。"""
+        """移动鼠标 — 缩放中 / 拖动中 / 更新光标形状。"""
+        if self._resizing:
+            delta = event.globalPosition().toPoint() - self._resize_start_pos
+            geo = QRect(self._resize_start_geo)
+            if self._resizing in ("right", "bottomright"):
+                geo.setRight(max(geo.left() + 200, geo.right() + delta.x()))
+            if self._resizing in ("bottom", "bottomright"):
+                geo.setBottom(max(geo.top() + 100, geo.bottom() + delta.y()))
+            self.setGeometry(geo)
+            return
+
         self._do_drag(event)
+
+        # 更新鼠标光标提示
+        if self._drag_pos is None:
+            edge = self._get_resize_edge(event.position().toPoint())
+            if edge == "right":
+                self.setCursor(Qt.CursorShape.SizeHorCursor)
+            elif edge == "bottom":
+                self.setCursor(Qt.CursorShape.SizeVerCursor)
+            elif edge == "bottomright":
+                self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+            else:
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        """释放鼠标 — 结束缩放或拖动。"""
+        if self._resizing:
+            self._resizing = None
+            self._update_theme()
+            return
         self._end_drag()
-        self._update_theme()  # 窗口可能移到了不同背景上
+        self._update_theme()
         super().mouseReleaseEvent(event)
 
     def eventFilter(self, obj, event) -> bool:
