@@ -221,11 +221,12 @@ class ReaderWindow(QWidget):
         self._text_widget = _ReaderTextEdit(self._container)
         self._text_widget.setReadOnly(True)
         self._text_widget.setFrameShape(QFrame.Shape.NoFrame)
+        # 滚动条用 CSS 隐藏（width:0），但策略保持启用，确保 value() 正确跟踪位置
         self._text_widget.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
         )
         self._text_widget.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
         )
 
         # 连接自定义信号
