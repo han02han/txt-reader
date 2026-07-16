@@ -319,22 +319,60 @@ class ReaderWindow(QWidget):
         super().mouseReleaseEvent(event)
 
     def eventFilter(self, obj, event) -> bool:
-        """事件过滤器 — 在容器边距区域按下左键时，转发到窗口拖动。"""
+        """事件过滤器 — 容器上的拖放与边缘缩放。"""
         from PySide6.QtCore import QEvent
         if obj is self.findChild(QFrame, "textContainer"):
             if event.type() == QEvent.Type.MouseButtonPress:
-                # 如果点击在容器的边距区域（不在 QTextEdit 上），启动拖动
                 child = obj.childAt(event.position().toPoint())
-                if child is not self._text_widget:
-                    self._begin_drag(event)
+                if child is self._text_widget:
+                    return False  # 文本区让 QTextEdit 自己处理
+
+                # 检查是否在窗口边缘 → 缩放
+                local = obj.mapTo(self, event.position().toPoint())
+                edge = self._get_resize_edge(local)
+                if edge:
+                    self._resizing = edge
+                    self._resize_start_geo = self.geometry()
+                    self._resize_start_pos = event.globalPosition().toPoint()
                     return True
+
+                # 否则拖动窗口
+                self._begin_drag(event)
+                return True
+
             elif event.type() == QEvent.Type.MouseMove:
+                if self._resizing:
+                    delta = event.globalPosition().toPoint() - self._resize_start_pos
+                    geo = QRect(self._resize_start_geo)
+                    if self._resizing in ("right", "bottomright"):
+                        geo.setRight(max(geo.left() + 200, geo.right() + delta.x()))
+                    if self._resizing in ("bottom", "bottomright"):
+                        geo.setBottom(max(geo.top() + 100, geo.bottom() + delta.y()))
+                    self.setGeometry(geo)
+                    return True
                 if self._drag_pos is not None:
                     self._do_drag(event)
                     return True
+                # 更新光标
+                local = obj.mapTo(self, event.position().toPoint())
+                edge = self._get_resize_edge(local)
+                if edge == "right":
+                    self.setCursor(Qt.CursorShape.SizeHorCursor)
+                elif edge == "bottom":
+                    self.setCursor(Qt.CursorShape.SizeVerCursor)
+                elif edge == "bottomright":
+                    self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+                else:
+                    self.setCursor(Qt.CursorShape.ArrowCursor)
+
             elif event.type() == QEvent.Type.MouseButtonRelease:
+                if self._resizing:
+                    self._resizing = None
+                    self._update_theme()
+                    return True
                 if self._drag_pos is not None:
                     self._end_drag()
+                    self._update_theme()
                     return True
         return super().eventFilter(obj, event)
 
