@@ -37,9 +37,9 @@ from PySide6.QtWidgets import (
 
 # 淡入淡出动画时长（毫秒）
 FADE_DURATION = 250
-# 默认窗口大小
-DEFAULT_WIDTH = 450
-DEFAULT_HEIGHT = 350
+# 默认窗口大小（约显示 4 行文字）
+DEFAULT_WIDTH = 380
+DEFAULT_HEIGHT = 110
 # 大文件分块大小（字符）
 CHUNK_SIZE = 50000
 # 窗口边缘缩放检测范围（像素）
