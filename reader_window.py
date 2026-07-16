@@ -125,9 +125,15 @@ class ReaderWindow(QWidget):
         self._opacity_effect: QGraphicsOpacityEffect | None = None
         self._fade_anim: QPropertyAnimation | None = None
 
+        # 自动保存阅读进度的定时器
+        self._save_timer = QTimer(self)
+        self._save_timer.setInterval(5000)  # 每 5 秒保存一次进度
+        self._save_timer.timeout.connect(self._save_reading_state)
+
         self._setup_window()
         self._setup_ui()
         self._restore_geometry()
+        self._restore_reading_state()
 
     # ------------------------------------------------------------------
     # 窗口设置
@@ -477,6 +483,8 @@ class ReaderWindow(QWidget):
             info = get_file_info(file_path)
             self.setWindowTitle(f"浮光 — {info['name']}")
 
+            self._save_timer.start()  # 开始定期保存阅读进度
+
             if not self.isVisible():
                 self.show()
 
@@ -524,6 +532,8 @@ class ReaderWindow(QWidget):
 
     def closeEvent(self, event) -> None:
         """关闭窗口时隐藏而非退出，由托盘控制真正退出。"""
+        self._save_reading_state()
+        self._save_timer.stop()
         if self._quitting:
             self._save_geometry()
             event.accept()
@@ -558,3 +568,60 @@ class ReaderWindow(QWidget):
                 (screen.width() - self.width()) // 2,
                 (screen.height() - self.height()) // 2,
             )
+
+    # ------------------------------------------------------------------
+    # 阅读进度持久化
+    # ------------------------------------------------------------------
+
+    def _save_reading_state(self) -> None:
+        """保存当前文件路径和滚动位置。"""
+        if not self._file_path or self._text_widget is None:
+            return
+        vbar = self._text_widget.verticalScrollBar()
+        if vbar is None:
+            return
+        s = QSettings("浮光", "浮光")
+        s.setValue("reading/last_file", self._file_path)
+        s.setValue("reading/scroll_pos", vbar.value())
+        s.setValue("reading/loaded_offset", self._current_offset)
+
+    def _restore_reading_state(self) -> None:
+        """恢复上次阅读的文件和滚动位置。"""
+        import os
+        s = QSettings("浮光", "浮光")
+        last_file = s.value("reading/last_file")
+        if not last_file:
+            return
+        if not os.path.exists(last_file):
+            return  # 文件已删除或移动，跳过
+
+        target_scroll = s.value("reading/scroll_pos", 0, type=int)
+        try:
+            self._file_path = last_file
+            self._current_offset = 0
+
+            text, self._current_offset, self._has_more = load_file_chunked(
+                last_file, 0, CHUNK_SIZE
+            )
+            if self._text_widget is not None:
+                self._text_widget.setPlainText(text)
+
+            # 持续加载直到覆盖保存的滚动位置
+            vbar = self._text_widget.verticalScrollBar() if self._text_widget else None
+            while self._has_more and vbar and vbar.maximum() < target_scroll:
+                text, self._current_offset, self._has_more = load_file_chunked(
+                    last_file, self._current_offset, CHUNK_SIZE
+                )
+                if self._text_widget and text:
+                    cursor = self._text_widget.textCursor()
+                    cursor.movePosition(QTextCursor.MoveOperation.End)
+                    cursor.insertText(text)
+
+            # 恢复滚动位置
+            if vbar and target_scroll > 0:
+                vbar.setValue(min(target_scroll, vbar.maximum()))
+
+            info = get_file_info(last_file)
+            self.setWindowTitle(f"浮光 — {info['name']}")
+        except Exception:
+            pass  # 恢复失败不影响正常使用
