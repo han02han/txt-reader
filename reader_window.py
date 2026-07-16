@@ -142,8 +142,9 @@ class ReaderWindow(QWidget):
     def _setup_window(self) -> None:
         """配置窗口标志与属性。"""
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint  # 无边框
-            | Qt.WindowType.Tool               # 隐藏任务栏图标
+            Qt.WindowType.FramelessWindowHint   # 无边框
+            | Qt.WindowType.Tool                # 隐藏任务栏图标
+            | Qt.WindowType.WindowStaysOnTopHint  # 保持在其他窗口之上
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAcceptDrops(True)
@@ -522,6 +523,9 @@ class ReaderWindow(QWidget):
         # 显示时确保内容可见（初始透明度为 0）
         if self._opacity_effect is not None:
             self._opacity_effect.setOpacity(1.0)
+        # 提到最前，确保鼠标事件能到达窗口
+        self.raise_()
+        self.activateWindow()
         # 窗口出现后再采样桌面背景，避免阻塞显示
         QTimer.singleShot(300, self._update_theme)
 
