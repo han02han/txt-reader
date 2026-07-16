@@ -27,9 +27,15 @@ from PySide6.QtGui import (
     QWheelEvent,
 )
 from PySide6.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
+    QLabel,
+    QSlider,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -59,6 +65,15 @@ _LIGHT_THEME = {
     "selection_bg": "rgba(0, 0, 0, 30)",
     "placeholder_color": "rgba(0, 0, 0, 100)",
 }
+# 可选字体列表
+_FONT_OPTIONS = [
+    "Microsoft YaHei",
+    "PingFang SC",
+    "SimSun",
+    "KaiTi",
+    "FangSong",
+    "DengXian",
+]
 
 
 class _ReaderTextEdit(QTextEdit):
@@ -120,6 +135,10 @@ class ReaderWindow(QWidget):
         self._has_more: bool = False
         self._quitting: bool = False
         self._is_light_bg: bool = False
+        # 从设置中读取或使用默认值
+        s = QSettings("浮光", "浮光")
+        self._font_family: str = s.value("appearance/font", "Microsoft YaHei")
+        self._text_alpha: int = s.value("appearance/alpha", 180, type=int)
         self._text_widget: _ReaderTextEdit | None = None
         self._container: QFrame | None = None
         self._opacity_effect: QGraphicsOpacityEffect | None = None
@@ -431,11 +450,12 @@ class ReaderWindow(QWidget):
             """)
 
         if self._text_widget is not None:
+            base_color = "255, 255, 255" if not self._is_light_bg else "0, 0, 0"
             self._text_widget.setStyleSheet(f"""
                 QTextEdit {{
                     background: transparent;
-                    color: {t['text_color']};
-                    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+                    color: rgba({base_color}, {self._text_alpha});
+                    font-family: "{self._font_family}", "Microsoft YaHei", sans-serif;
                     font-size: 14px;
                     line-height: 1.5;
                     selection-background-color: {t['selection_bg']};
@@ -629,3 +649,73 @@ class ReaderWindow(QWidget):
             self.setWindowTitle(f"浮光 — {info['name']}")
         except Exception:
             pass  # 恢复失败不影响正常使用
+
+    # ------------------------------------------------------------------
+    # 外观设置
+    # ------------------------------------------------------------------
+
+    def show_settings(self) -> None:
+        """弹出外观设置对话框。"""
+        dlg = _SettingsDialog(self._font_family, self._text_alpha, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._font_family, self._text_alpha = dlg.values()
+            s = QSettings("浮光", "浮光")
+            s.setValue("appearance/font", self._font_family)
+            s.setValue("appearance/alpha", self._text_alpha)
+            self._apply_theme()
+
+
+class _SettingsDialog(QDialog):
+    """字体与文字透明度设置对话框。"""
+
+    def __init__(self, current_font: str, current_alpha: int, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("外观设置")
+        self.resize(320, 180)
+        self.setWindowFlags(
+            Qt.WindowType.Dialog
+            | Qt.WindowType.WindowCloseButtonHint
+            | Qt.WindowType.WindowTitleHint
+        )
+
+        layout = QFormLayout(self)
+
+        # 字体选择
+        self._font_combo = QComboBox()
+        for name in _FONT_OPTIONS:
+            self._font_combo.addItem(name)
+        idx = self._font_combo.findText(current_font)
+        if idx >= 0:
+            self._font_combo.setCurrentIndex(idx)
+        layout.addRow("字体:", self._font_combo)
+
+        # 透明度滑块 (alpha 120-240)
+        self._alpha_slider = QSlider(Qt.Orientation.Horizontal)
+        self._alpha_slider.setRange(120, 240)
+        self._alpha_slider.setValue(current_alpha)
+        self._alpha_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._alpha_slider.setTickInterval(20)
+        self._alpha_value_label = QLabel(str(current_alpha))
+        self._alpha_slider.valueChanged.connect(
+            lambda v: self._alpha_value_label.setText(str(v))
+        )
+
+        alpha_row = QHBoxLayout()
+        alpha_row.addWidget(QLabel("淡"))
+        alpha_row.addWidget(self._alpha_slider)
+        alpha_row.addWidget(QLabel("亮"))
+        alpha_row.addWidget(self._alpha_value_label)
+        layout.addRow("文字:", alpha_row)
+
+        # 按钮
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+    def values(self) -> tuple[str, int]:
+        """返回 (font_family, alpha)。"""
+        return self._font_combo.currentText(), self._alpha_slider.value()

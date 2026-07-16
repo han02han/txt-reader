@@ -41,6 +41,7 @@ class TrayManager(QSystemTrayIcon):
     # 信号
     toggle_window = Signal()          # 请求切换窗口可见性
     open_file_requested = Signal(str)  # 请求打开文件（携带路径）
+    settings_requested = Signal()     # 请求打开设置
     quit_app = Signal()               # 请求退出应用
 
     def __init__(self, parent=None):
@@ -63,6 +64,10 @@ class TrayManager(QSystemTrayIcon):
         self._open_action = QAction("打开文件...")
         self._open_action.triggered.connect(self._on_open_file)
         self._menu.addAction(self._open_action)
+
+        self._settings_action = QAction("设置...")
+        self._settings_action.triggered.connect(self._on_settings)
+        self._menu.addAction(self._settings_action)
 
         self._menu.addSeparator()
 
@@ -103,6 +108,10 @@ class TrayManager(QSystemTrayIcon):
         )
         if path:
             self.open_file_requested.emit(path)
+
+    def _on_settings(self) -> None:
+        """打开设置对话框。"""
+        self.settings_requested.emit()
 
     def _on_quit(self) -> None:
         """退出应用。"""

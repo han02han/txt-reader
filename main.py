@@ -35,6 +35,7 @@ class App:
         # 托盘操作
         self._tray.toggle_window.connect(self._on_toggle_visibility)
         self._tray.open_file_requested.connect(self._window.open_file)
+        self._tray.settings_requested.connect(self._window.show_settings)
         self._tray.quit_app.connect(self._on_quit)
 
     # ------------------------------------------------------------------
