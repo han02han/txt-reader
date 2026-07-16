@@ -235,9 +235,17 @@ class ReaderWindow(QWidget):
     # ------------------------------------------------------------------
 
     def enterEvent(self, event) -> None:
-        """鼠标进入窗口 → 文字淡入。"""
+        """鼠标进入窗口 → 文字淡入 + 更新主题。"""
         super().enterEvent(event)
         self._fade_to(1.0)
+        self._update_theme()
+
+    def changeEvent(self, event) -> None:
+        """窗口激活状态变化 → 更新主题（适用于 Alt+Tab 切换回来）。"""
+        from PySide6.QtCore import QEvent
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            self._update_theme()
+        super().changeEvent(event)
 
     def leaveEvent(self, event) -> None:
         """鼠标离开窗口 → 文字淡出到几乎不可见（但保留鼠标事件响应）。"""
