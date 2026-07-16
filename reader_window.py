@@ -653,39 +653,38 @@ class ReaderWindow(QWidget):
         if not last_file:
             return
         if not _os.path.exists(last_file):
-            return  # 文件已删除或移动，跳过
+            _save_state({})  # 文件已删除，清除记录
+            return
 
         target_scroll = data.get("scroll_pos", 0)
-        try:
-            self._file_path = last_file
-            self._current_offset = 0
 
+        self._file_path = last_file
+        self._current_offset = 0
+
+        text, self._current_offset, self._has_more = load_file_chunked(
+            last_file, 0, CHUNK_SIZE
+        )
+        if self._text_widget is not None:
+            self._text_widget.setPlainText(text)
+
+        # 持续加载直到覆盖保存的滚动位置
+        vbar = self._text_widget.verticalScrollBar() if self._text_widget else None
+        while self._has_more and vbar and vbar.maximum() < target_scroll:
             text, self._current_offset, self._has_more = load_file_chunked(
-                last_file, 0, CHUNK_SIZE
+                last_file, self._current_offset, CHUNK_SIZE
             )
-            if self._text_widget is not None:
-                self._text_widget.setPlainText(text)
+            if self._text_widget and text:
+                cursor = self._text_widget.textCursor()
+                cursor.movePosition(QTextCursor.MoveOperation.End)
+                cursor.insertText(text)
 
-            # 持续加载直到覆盖保存的滚动位置
-            vbar = self._text_widget.verticalScrollBar() if self._text_widget else None
-            while self._has_more and vbar and vbar.maximum() < target_scroll:
-                text, self._current_offset, self._has_more = load_file_chunked(
-                    last_file, self._current_offset, CHUNK_SIZE
-                )
-                if self._text_widget and text:
-                    cursor = self._text_widget.textCursor()
-                    cursor.movePosition(QTextCursor.MoveOperation.End)
-                    cursor.insertText(text)
+        # 恢复滚动位置
+        if vbar and target_scroll > 0:
+            vbar.setValue(min(target_scroll, vbar.maximum()))
 
-            # 恢复滚动位置
-            if vbar and target_scroll > 0:
-                vbar.setValue(min(target_scroll, vbar.maximum()))
-
-            info = get_file_info(last_file)
-            self.setWindowTitle(f"浮光 — {info['name']}")
-            self._save_timer.start()  # 恢复后启动自动保存
-        except Exception:
-            pass  # 恢复失败不影响正常使用
+        info = get_file_info(last_file)
+        self.setWindowTitle(f"浮光 — {info['name']}")
+        self._save_timer.start()
 
     # ------------------------------------------------------------------
     # 外观设置

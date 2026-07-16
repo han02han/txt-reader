@@ -24,6 +24,10 @@ class App:
         self._connect_signals()
         self._tray.show()
 
+        # 如果恢复了上次的文件，显示窗口
+        if self._window._file_path is not None:
+            self._window.show()
+
     def _connect_signals(self) -> None:
         """连接窗口与托盘的信号。"""
         # 窗口关闭 → 隐藏到托盘
