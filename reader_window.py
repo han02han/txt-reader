@@ -641,11 +641,25 @@ class ReaderWindow(QWidget):
         vbar = self._text_widget.verticalScrollBar()
         if vbar is None:
             return
-        _save_state({
+
+        scroll_val = vbar.value()
+        scroll_max = vbar.maximum()
+
+        data = {
             "last_file": self._file_path,
-            "scroll_pos": vbar.value(),
+            "scroll_pos": scroll_val,
+            "scroll_max": scroll_max,
             "loaded_offset": self._current_offset,
-        })
+        }
+        _save_state(data)
+
+        # 调试日志
+        try:
+            with open(_state_path() + ".log", "a", encoding="utf-8") as f:
+                import datetime
+                f.write(f"{datetime.datetime.now()}: saved scroll={scroll_val} max={scroll_max}\n")
+        except Exception:
+            pass
 
     def _restore_reading_state(self) -> None:
         """从 JSON 文件恢复上次阅读的文件和滚动位置。"""
