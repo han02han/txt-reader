@@ -287,35 +287,50 @@ class ReaderWindow(QWidget):
     # ------------------------------------------------------------------
 
     def _update_theme(self) -> None:
-        """采样窗口下方桌面背景亮度，自动切换明暗主题。"""
+        """采样窗口下方桌面背景亮度，自动切换明暗主题。
+
+        故意在窗口外侧采样，避免捕获到窗口自身内容。
+        """
         screen = self.screen()
         if screen is None:
             return
 
-        geo = self.geometry()
-        # 采样窗口中心 60×60 区域
-        sample_size = 60
-        sx = max(0, geo.x() + (geo.width() - sample_size) // 2)
-        sy = max(0, geo.y() + (geo.height() - sample_size) // 2)
+        try:
+            geo = self.geometry()
+            sample_size = 60
 
-        pixmap = screen.grabWindow(0, sx, sy, sample_size, sample_size)
-        img = pixmap.toImage()
+            # 在窗口左外侧采样，避免拍到窗口自己；
+            # 如果窗口靠左边界，则改为右外侧
+            if geo.x() > sample_size + 10:
+                sx = geo.x() - sample_size - 10
+            else:
+                sx = min(geo.right() + 10, screen.size().width() - sample_size)
+            sy = max(0, geo.y() + (geo.height() - sample_size) // 2)
 
-        # 每隔 2 像素采样一次，减少计算量
-        total, count = 0, 0
-        for py in range(0, img.height(), 2):
-            for px in range(0, img.width(), 2):
-                color = img.pixelColor(px, py)
-                # 感知亮度公式
-                total += 0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()
-                count += 1
+            pixmap = screen.grabWindow(0, sx, sy, sample_size, sample_size)
+            if pixmap.isNull():
+                return
+            img = pixmap.toImage()
+            if img.isNull():
+                return
 
-        avg = total / max(count, 1)
-        light = avg > BRIGHTNESS_THRESHOLD
+            # 每隔 2 像素采样一次，减少计算量
+            total, count = 0, 0
+            for py in range(0, img.height(), 2):
+                for px in range(0, img.width(), 2):
+                    color = img.pixelColor(px, py)
+                    # 感知亮度公式
+                    total += 0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()
+                    count += 1
 
-        if light != self._is_light_bg:
-            self._is_light_bg = light
-            self._apply_theme()
+            avg = total / max(count, 1)
+            light = avg > BRIGHTNESS_THRESHOLD
+
+            if light != self._is_light_bg:
+                self._is_light_bg = light
+                self._apply_theme()
+        except Exception:
+            pass  # 检测失败时保持当前主题，不影响正常使用
 
     def _apply_theme(self) -> None:
         """根据当前背景亮度应用对应的文字与容器颜色。"""
@@ -416,10 +431,14 @@ class ReaderWindow(QWidget):
     # 窗口关闭 → 隐藏到托盘
     # ------------------------------------------------------------------
 
-    def showEvent(self, event) -> None:
-        """窗口显示时更新主题并通知托盘。"""
-        super().showEvent(event)
+    def show(self) -> None:
+        """显示窗口 — 先采样背景再出现，避免自捕获。"""
         self._update_theme()
+        super().show()
+
+    def showEvent(self, event) -> None:
+        """窗口已显示，通知托盘。"""
+        super().showEvent(event)
         self.visibility_changed.emit(True)
 
     def closeEvent(self, event) -> None:
