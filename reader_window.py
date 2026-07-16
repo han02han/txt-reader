@@ -13,6 +13,7 @@ from PySide6.QtCore import (
     QPropertyAnimation,
     QSettings,
     Qt,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import (
@@ -401,9 +402,7 @@ class ReaderWindow(QWidget):
             self.setWindowTitle(f"浮光 — {info['name']}")
 
             if not self.isVisible():
-                self._update_theme()       # 窗口未显示时采样桌面背景
                 self.show()
-                # 直接设透明度，跳过动画，避免 setStyleSheet 干扰动画
                 if self._opacity_effect is not None:
                     self._opacity_effect.setOpacity(1.0)
 
@@ -435,21 +434,26 @@ class ReaderWindow(QWidget):
     # ------------------------------------------------------------------
 
     def showEvent(self, event) -> None:
-        """窗口已显示，通知托盘。"""
+        """窗口已显示，通知托盘，延迟更新主题。"""
         super().showEvent(event)
         self.visibility_changed.emit(True)
+        # 窗口出现后再采样桌面背景，避免 grabWindow 阻塞显示
+        QTimer.singleShot(300, self._update_theme)
+
+    def hideEvent(self, event) -> None:
+        """窗口已隐藏，通知托盘；同时异步更新主题。"""
+        super().hideEvent(event)
+        self.visibility_changed.emit(False)
 
     def closeEvent(self, event) -> None:
         """关闭窗口时隐藏而非退出，由托盘控制真正退出。"""
         if self._quitting:
             self._save_geometry()
-            self.visibility_changed.emit(False)
             event.accept()
             return
         self._save_geometry()
         self.hide()
         self.hide_requested.emit()
-        self.visibility_changed.emit(False)
         event.ignore()
 
     def really_close(self) -> None:
