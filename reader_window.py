@@ -474,8 +474,19 @@ class ReaderWindow(QWidget):
             pass  # 检测失败时保持当前主题，不影响正常使用
 
     def _apply_theme(self) -> None:
-        """根据当前背景亮度应用对应的文字与容器颜色。"""
+        """根据当前背景亮度应用对应的文字与容器颜色。
+
+        注意：setStyleSheet 会触发 QTextEdit 内部布局重建，可能导致
+        滚动位置被重置。因此先保存再恢复。
+        """
         t = _LIGHT_THEME if self._is_light_bg else _DARK_THEME
+
+        # 保存当前滚动位置（setStyleSheet 可能重置它）
+        saved_scroll = 0
+        if self._text_widget is not None:
+            vbar = self._text_widget.verticalScrollBar()
+            if vbar is not None:
+                saved_scroll = vbar.value()
 
         if self._container is not None:
             self._container.setStyleSheet(f"""
@@ -498,6 +509,10 @@ class ReaderWindow(QWidget):
                 }}
                 QScrollBar {{ width: 0; height: 0; }}
             """)
+
+        # 恢复滚动位置（延迟等样式生效后的布局完成）
+        if saved_scroll > 0 and self._text_widget is not None:
+            QTimer.singleShot(50, lambda s=saved_scroll: self._restore_scroll(s))
 
     # ------------------------------------------------------------------
     # 拖放 TXT 文件
