@@ -19,6 +19,7 @@ from PySide6.QtCore import (
     QSettings,
     Qt,
     QTimer,
+    QVariantAnimation,
     Signal,
 )
 from PySide6.QtGui import (
@@ -103,18 +104,121 @@ _FONT_OPTIONS = [
 
 
 class _ReaderTextEdit(QTextEdit):
-    """自定义文本编辑器：支持滚轮接近底部时通知父窗口加载更多，
+    """自定义文本编辑器：支持滚轮平滑滚动、键盘快捷键、接近底部时加载更多，
     以及 Ctrl+拖动来移动窗口。"""
 
     near_bottom = Signal()
     drag_requested = Signal(QMouseEvent)
 
+    # 滚轮每格滚动行数（用于平滑滚动）
+    WHEEL_LINES = 3
+    # 平滑滚动动画时长（毫秒）
+    SCROLL_ANIM_DURATION = 100
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._scroll_anim: QVariantAnimation | None = None
+        self._scroll_target: int = 0
+
+    # ------------------------------------------------------------------
+    # 滚轮 — 平滑滚动
+    # ------------------------------------------------------------------
+
     def wheelEvent(self, event: QWheelEvent) -> None:
-        """滚轮事件 — 检测接近底部时发出信号。"""
+        """滚轮事件 — 3 行/格平滑滚动 + 接近底部加载更多。"""
         vbar = self.verticalScrollBar()
-        if vbar.isVisible() and vbar.value() >= vbar.maximum() - 50:
+        if vbar is None:
+            super().wheelEvent(event)
+            return
+
+        # 检测接近底部
+        if vbar.value() >= vbar.maximum() - 50:
             self.near_bottom.emit()
-        super().wheelEvent(event)
+
+        angle = event.angleDelta().y()
+        if angle == 0:
+            event.accept()
+            return
+
+        line_height = self.fontMetrics().lineSpacing()
+        # 每格（120 单位）= WHEEL_LINES 行；负号使「向下滚=文字前进」
+        lines = (-angle / 120.0) * self.WHEEL_LINES
+        delta_px = int(lines * line_height)
+
+        if delta_px != 0:
+            self._animate_scroll_by(delta_px)
+
+        event.accept()
+
+    # ------------------------------------------------------------------
+    # 键盘快捷键
+    # ------------------------------------------------------------------
+
+    def keyPressEvent(self, event) -> None:
+        """Ctrl+箭头 = 大幅跳转；其它交给父类。"""
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            line_h = self.fontMetrics().lineSpacing()
+            delta = 0
+            if event.key() == Qt.Key.Key_Right:
+                delta = 100 * line_h
+            elif event.key() == Qt.Key.Key_Left:
+                delta = -100 * line_h
+            elif event.key() == Qt.Key.Key_Down:
+                delta = 1000 * line_h
+            elif event.key() == Qt.Key.Key_Up:
+                delta = -1000 * line_h
+
+            if delta != 0:
+                self._animate_scroll_by(delta, duration_ms=250)
+                return
+        super().keyPressEvent(event)
+
+    # ------------------------------------------------------------------
+    # 平滑滚动动画
+    # ------------------------------------------------------------------
+
+    def _animate_scroll_by(self, delta_px: int, duration_ms: int | None = None) -> None:
+        """平滑滚动 delta_px 像素，新事件到达时自动更新目标值。"""
+        vbar = self.verticalScrollBar()
+        if vbar is None:
+            return
+
+        if duration_ms is None:
+            duration_ms = self.SCROLL_ANIM_DURATION
+
+        current = vbar.value()
+        # 如果动画运行中，在上次目标基础上累加；否则从当前位置开始
+        if (self._scroll_anim is not None
+                and self._scroll_anim.state() == QVariantAnimation.State.Running):
+            self._scroll_target = max(0, min(vbar.maximum(),
+                                             self._scroll_target + delta_px))
+        else:
+            self._scroll_target = max(0, min(vbar.maximum(),
+                                             current + delta_px))
+
+        if self._scroll_target == current:
+            return
+
+        if self._scroll_anim is not None:
+            self._scroll_anim.stop()
+
+        self._scroll_anim = QVariantAnimation(self)
+        self._scroll_anim.setDuration(duration_ms)
+        self._scroll_anim.setStartValue(current)
+        self._scroll_anim.setEndValue(self._scroll_target)
+        self._scroll_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._scroll_anim.valueChanged.connect(self._on_scroll_anim_tick)
+        self._scroll_anim.start()
+
+    def _on_scroll_anim_tick(self, value) -> None:
+        """动画每帧更新滚动条位置。"""
+        vbar = self.verticalScrollBar()
+        if vbar is not None:
+            vbar.setValue(round(value))
+
+    # ------------------------------------------------------------------
+    # 窗口拖动（Ctrl+鼠标）
+    # ------------------------------------------------------------------
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """按住 Ctrl + 左键 → 请求拖动窗口；否则正常选择文本。"""
