@@ -865,7 +865,8 @@ class ReaderWindow(QWidget):
         """用文档字符位置恢复滚动（带重试，不依赖排版进度）。
 
         相比 scrollbar 值，字符位置不受窗口大小、字体、排版完成度的影响，
-        恢复更可靠。
+        恢复更可靠。ensureCursorVisible 之后用 cursorRect 微调，
+        确保目标字符精确位于视口顶部。
         """
         if self._text_widget is None:
             return
@@ -876,6 +877,15 @@ class ReaderWindow(QWidget):
             cursor.setPosition(pos)
             self._text_widget.setTextCursor(cursor)
             self._text_widget.ensureCursorVisible()
+            # 微调：ensureCursorVisible 只保证光标可见，不保证在顶部。
+            # 用 cursorRect 算出光标在视口中的偏移，反向调整 scrollbar
+            # 使其精确出现在视口顶部 (y=0)，与 cursorForPosition(QPoint(0,0)) 一致
+            rect = self._text_widget.cursorRect(cursor)
+            if not rect.isNull():
+                vbar = self._text_widget.verticalScrollBar()
+                if vbar is not None:
+                    adjusted = vbar.value() + rect.top()
+                    vbar.setValue(max(0, min(adjusted, vbar.maximum())))
             # 调试日志
             try:
                 with open(_state_path() + ".log", "a", encoding="utf-8") as f:
