@@ -581,16 +581,15 @@ class ReaderWindow(QWidget):
         """根据当前背景亮度应用对应的文字与容器颜色。
 
         注意：setStyleSheet 会触发 QTextEdit 内部布局重建，可能导致
-        滚动位置被重置。因此先保存再恢复。
+        滚动位置被重置。因此先保存视口第一个可见字符位置再恢复。
         """
         t = _LIGHT_THEME if self._is_light_bg else _DARK_THEME
 
-        # 保存当前滚动位置（setStyleSheet 可能重置它）
-        saved_scroll = 0
+        # 保存当前视口第一个可见字符位置（setStyleSheet 可能重置滚动）
+        saved_char: int = 0
         if self._text_widget is not None:
-            vbar = self._text_widget.verticalScrollBar()
-            if vbar is not None:
-                saved_scroll = vbar.value()
+            cursor = self._text_widget.cursorForPosition(QPoint(0, 0))
+            saved_char = cursor.position()
 
         if self._container is not None:
             self._container.setStyleSheet(f"""
@@ -614,9 +613,9 @@ class ReaderWindow(QWidget):
                 QScrollBar {{ width: 0; height: 0; }}
             """)
 
-        # 恢复滚动位置（延迟等样式生效后的布局完成）
-        if saved_scroll > 0 and self._text_widget is not None:
-            QTimer.singleShot(50, lambda s=saved_scroll: self._restore_scroll(s))
+        # 恢复滚动位置（用字符位置，不依赖排版进度）
+        if saved_char > 0 and self._text_widget is not None:
+            QTimer.singleShot(50, lambda: self._restore_char_position(saved_char))
 
     # ------------------------------------------------------------------
     # 拖放 TXT 文件
@@ -764,11 +763,17 @@ class ReaderWindow(QWidget):
         scroll_val = vbar.value()
         scroll_max = vbar.maximum()
 
+        # 保存视口第一个可见字符在文档中的位置（用于可靠恢复，
+        # 不依赖窗口大小 / 字体 / 排版进度）
+        cursor = self._text_widget.cursorForPosition(QPoint(0, 0))
+        first_visible_char = cursor.position()
+
         data = {
             "last_file": self._file_path,
             "scroll_pos": scroll_val,
             "scroll_max": scroll_max,
             "loaded_offset": self._current_offset,
+            "first_visible_char": first_visible_char,
         }
         _save_state(data)
 
@@ -776,7 +781,7 @@ class ReaderWindow(QWidget):
         try:
             with open(_state_path() + ".log", "a", encoding="utf-8") as f:
                 import datetime
-                f.write(f"{datetime.datetime.now()}: saved scroll={scroll_val} max={scroll_max}\n")
+                f.write(f"{datetime.datetime.now()}: saved scroll={scroll_val} max={scroll_max} char={first_visible_char}\n")
         except Exception:
             pass
 
@@ -790,7 +795,14 @@ class ReaderWindow(QWidget):
             _save_state({})  # 文件已删除，清除记录
             return
 
-        target_scroll = data.get("scroll_pos", 0)
+        # 优先使用字符位置恢复（不受窗口尺寸/字体/排版进度影响）；
+        # 旧格式没有 first_visible_char，回退到 scroll_pos
+        target_char = data.get("first_visible_char")
+        if target_char is not None and target_char > 0:
+            target_scroll = 0  # 用字符位置，不需要 scroll 回退
+        else:
+            target_char = None
+            target_scroll = data.get("scroll_pos", 0)
 
         self._file_path = last_file
         self._current_offset = 0
@@ -801,7 +813,7 @@ class ReaderWindow(QWidget):
         if self._text_widget is not None:
             self._text_widget.setPlainText(text)
 
-        # 持续加载直到覆盖保存的滚动位置
+        # 持续加载直到覆盖保存的滚动位置（仅旧格式回退时需要）
         vbar = self._text_widget.verticalScrollBar() if self._text_widget else None
         while self._has_more and vbar and vbar.maximum() < target_scroll:
             text, self._current_offset, self._has_more = load_file_chunked(
@@ -813,20 +825,62 @@ class ReaderWindow(QWidget):
                 cursor.insertText(text)
 
         # 恢复滚动位置（延迟等文字排版完成）
-        if target_scroll > 0:
+        if target_char is not None and target_char > 0:
+            QTimer.singleShot(100, lambda: self._restore_char_position(target_char))
+        elif target_scroll > 0:
             QTimer.singleShot(100, lambda: self._restore_scroll(target_scroll))
 
         info = get_file_info(last_file)
         self.setWindowTitle(f"浮光 — {info['name']}")
         self._save_timer.start()
 
-    def _restore_scroll(self, target: int) -> None:
-        """延迟恢复滚动位置（等 QTextEdit 完成排版后调用）。"""
+    def _restore_scroll(self, target: int, retries: int = 5) -> None:
+        """延迟恢复滚动位置（带重试，等 QTextEdit 完成排版后调用）。
+
+        旧格式回退使用。新格式优先使用 _restore_char_position。
+        """
         if self._text_widget is None:
             return
         vbar = self._text_widget.verticalScrollBar()
         if vbar is not None:
-            vbar.setValue(min(target, vbar.maximum()))
+            if vbar.maximum() >= target:
+                vbar.setValue(target)
+                # 调试日志
+                try:
+                    with open(_state_path() + ".log", "a", encoding="utf-8") as f:
+                        import datetime
+                        f.write(f"{datetime.datetime.now()}: restored scroll={target} max={vbar.maximum()}\n")
+                except Exception:
+                    pass
+            elif retries > 0:
+                QTimer.singleShot(100, lambda: self._restore_scroll(target, retries - 1))
+
+    def _restore_char_position(self, pos: int, retries: int = 5) -> None:
+        """用文档字符位置恢复滚动（带重试，不依赖排版进度）。
+
+        相比 scrollbar 值，字符位置不受窗口大小、字体、排版完成度的影响，
+        恢复更可靠。
+        """
+        if self._text_widget is None:
+            return
+        doc = self._text_widget.document()
+        # characterCount() 包含末尾段落分隔符，所以用 > 判断
+        if doc.characterCount() > pos:
+            cursor = self._text_widget.textCursor()
+            cursor.setPosition(pos)
+            self._text_widget.setTextCursor(cursor)
+            self._text_widget.ensureCursorVisible()
+            # 调试日志
+            try:
+                with open(_state_path() + ".log", "a", encoding="utf-8") as f:
+                    import datetime
+                    vbar = self._text_widget.verticalScrollBar()
+                    cur_scroll = vbar.value() if vbar else 0
+                    f.write(f"{datetime.datetime.now()}: restored char_pos={pos} scroll_now={cur_scroll}\n")
+            except Exception:
+                pass
+        elif retries > 0:
+            QTimer.singleShot(100, lambda: self._restore_char_position(pos, retries - 1))
 
     # ------------------------------------------------------------------
     # 外观设置
