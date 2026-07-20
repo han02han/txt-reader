@@ -813,13 +813,19 @@ class ReaderWindow(QWidget):
         if self._text_widget is not None:
             self._text_widget.setPlainText(text)
 
-        # 持续加载直到覆盖保存的滚动位置（仅旧格式回退时需要）
+        # 持续加载直到文本量覆盖目标恢复位置（字符位置或滚动位置）
         vbar = self._text_widget.verticalScrollBar() if self._text_widget else None
-        while self._has_more and vbar and vbar.maximum() < target_scroll:
+        while self._has_more and self._text_widget is not None:
+            # 新格式：字符数够覆盖 target_char 就停
+            if target_char is not None and self._text_widget.document().characterCount() > target_char:
+                break
+            # 旧格式：滚动条最大值够覆盖 target_scroll 就停
+            if target_char is None and vbar and vbar.maximum() >= target_scroll:
+                break
             text, self._current_offset, self._has_more = load_file_chunked(
                 last_file, self._current_offset, CHUNK_SIZE
             )
-            if self._text_widget and text:
+            if text:
                 cursor = self._text_widget.textCursor()
                 cursor.movePosition(QTextCursor.MoveOperation.End)
                 cursor.insertText(text)
