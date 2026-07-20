@@ -265,6 +265,9 @@ class ReaderWindow(QWidget):
         self._has_more: bool = False
         self._quitting: bool = False
         self._is_light_bg: bool = False
+        # 缓存最后已知的视口第一个可见字符位置，
+        # 防止窗口隐藏时 cursorForPosition 返回错误值导致状态文件损坏
+        self._cached_first_visible_char: int = 0
         # 从设置中读取或使用默认值
         s = QSettings("浮光", "浮光")
         self._font_family: str = s.value("appearance/font", "Microsoft YaHei")
@@ -691,7 +694,7 @@ class ReaderWindow(QWidget):
     # ------------------------------------------------------------------
 
     def showEvent(self, event) -> None:
-        """窗口已显示，通知托盘，延迟更新主题。"""
+        """窗口已显示，通知托盘，恢复阅读位置，延迟更新主题。"""
         super().showEvent(event)
         self.visibility_changed.emit(True)
         # 显示时确保内容可见（初始透明度为 0）
@@ -700,11 +703,25 @@ class ReaderWindow(QWidget):
         # 提到最前，确保鼠标事件能到达窗口
         self.raise_()
         self.activateWindow()
+        # 恢复隐藏前保存的阅读位置（hide/show 可能导致 QTextEdit 丢失滚动位置）
+        if self._cached_first_visible_char > 0 and self._text_widget is not None:
+            QTimer.singleShot(150, lambda: self._restore_char_position(self._cached_first_visible_char))
         # 窗口出现后再采样桌面背景，避免阻塞显示
         QTimer.singleShot(300, self._update_theme)
 
     def hideEvent(self, event) -> None:
-        """窗口已隐藏，通知托盘；同时异步更新主题。"""
+        """窗口已隐藏，通知托盘；保存阅读位置防止隐藏期间状态损坏。"""
+        # 在隐藏前立即保存当前阅读位置（隐藏后 cursorForPosition 可能返回错误值）
+        # 直接在这里获取位置，不依赖 isVisible()（hideEvent 时可能已为 False）
+        if self._file_path and self._text_widget is not None:
+            try:
+                cursor = self._text_widget.cursorForPosition(QPoint(0, 0))
+                pos = cursor.position()
+                if pos > 0:
+                    self._cached_first_visible_char = pos
+            except Exception:
+                pass
+        self._save_reading_state()
         super().hideEvent(event)
         self.visibility_changed.emit(False)
 
@@ -765,8 +782,15 @@ class ReaderWindow(QWidget):
 
         # 保存视口第一个可见字符在文档中的位置（用于可靠恢复，
         # 不依赖窗口大小 / 字体 / 排版进度）
-        cursor = self._text_widget.cursorForPosition(QPoint(0, 0))
-        first_visible_char = cursor.position()
+        # 注意：窗口隐藏时 cursorForPosition 可能返回错误值，
+        # 此时使用缓存的位置（已在 hideEvent 中保存）
+        if self.isVisible():
+            cursor = self._text_widget.cursorForPosition(QPoint(0, 0))
+            first_visible_char = cursor.position()
+            if first_visible_char > 0:
+                self._cached_first_visible_char = first_visible_char
+        else:
+            first_visible_char = self._cached_first_visible_char
 
         data = {
             "last_file": self._file_path,
