@@ -169,6 +169,11 @@ class _ReaderTextEdit(QTextEdit):
                 delta = -1000 * line_h
 
             if delta != 0:
+                # Ctrl+箭头大幅跳转可能直达底部，先触发加载更多内容
+                if delta > 0:
+                    vbar = self.verticalScrollBar()
+                    if vbar and vbar.value() + delta >= vbar.maximum():
+                        self.near_bottom.emit()
                 self._animate_scroll_by(delta, duration_ms=250)
                 return
         super().keyPressEvent(event)
