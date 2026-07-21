@@ -273,6 +273,8 @@ class ReaderWindow(QWidget):
         # 缓存最后已知的视口第一个可见字符位置，
         # 防止窗口隐藏时 cursorForPosition 返回错误值导致状态文件损坏
         self._cached_first_visible_char: int = 0
+        # 初始阅读状态恢复是否已完成（防止 _apply_theme 在恢复前保存错误位置）
+        self._reading_state_restored: bool = False
         # 从设置中读取或使用默认值
         s = QSettings("浮光", "浮光")
         self._font_family: str = s.value("appearance/font", "Microsoft YaHei")
@@ -622,8 +624,11 @@ class ReaderWindow(QWidget):
             """)
 
         # 恢复滚动位置（用字符位置，不依赖排版进度）
-        if saved_char > 0 and self._text_widget is not None:
-            QTimer.singleShot(50, lambda: self._restore_char_position(saved_char))
+        # 如果初始阅读状态还未恢复完成，跳过 save-and-restore，
+        # 避免 _apply_theme 保存到错误位置后覆盖 _restore_reading_state 的正确恢复。
+        if saved_char > 0 and self._text_widget is not None and self._reading_state_restored:
+            QTimer.singleShot(50, lambda: self._restore_char_position(
+                saved_char, source="apply_theme"))
 
     # ------------------------------------------------------------------
     # 拖放 TXT 文件
@@ -653,6 +658,8 @@ class ReaderWindow(QWidget):
         try:
             self._file_path = file_path
             self._current_offset = 0
+            # 新文件直接从开头开始，不需要恢复，允许 _apply_theme 正常 save-and-restore
+            self._reading_state_restored = True
 
             # 加载第一块
             text, self._current_offset, self._has_more = load_file_chunked(
@@ -710,7 +717,8 @@ class ReaderWindow(QWidget):
         self.activateWindow()
         # 恢复隐藏前保存的阅读位置（hide/show 可能导致 QTextEdit 丢失滚动位置）
         if self._cached_first_visible_char > 0 and self._text_widget is not None:
-            QTimer.singleShot(150, lambda: self._restore_char_position(self._cached_first_visible_char))
+            QTimer.singleShot(150, lambda: self._restore_char_position(
+                self._cached_first_visible_char, source="show_event"))
         # 窗口出现后再采样桌面背景，避免阻塞显示
         QTimer.singleShot(300, self._update_theme)
 
@@ -861,15 +869,18 @@ class ReaderWindow(QWidget):
 
         # 恢复滚动位置（延迟等文字排版完成）
         if target_char is not None and target_char > 0:
-            QTimer.singleShot(100, lambda: self._restore_char_position(target_char))
+            QTimer.singleShot(100, lambda: self._restore_char_position(
+                target_char, source="restore_state"))
         elif target_scroll > 0:
-            QTimer.singleShot(100, lambda: self._restore_scroll(target_scroll))
+            QTimer.singleShot(100, lambda: self._restore_scroll(
+                target_scroll, source="restore_state"))
 
         info = get_file_info(last_file)
         self.setWindowTitle(f"浮光 — {info['name']}")
         self._save_timer.start()
 
-    def _restore_scroll(self, target: int, retries: int = 5) -> None:
+    def _restore_scroll(self, target: int, retries: int = 5,
+                        source: str = "unknown") -> None:
         """延迟恢复滚动位置（带重试，等 QTextEdit 完成排版后调用）。
 
         旧格式回退使用。新格式优先使用 _restore_char_position。
@@ -880,17 +891,23 @@ class ReaderWindow(QWidget):
         if vbar is not None:
             if vbar.maximum() >= target:
                 vbar.setValue(target)
+                # 初始阅读状态恢复完成
+                if source == "restore_state":
+                    self._reading_state_restored = True
                 # 调试日志
                 try:
                     with open(_state_path() + ".log", "a", encoding="utf-8") as f:
                         import datetime
-                        f.write(f"{datetime.datetime.now()}: restored scroll={target} max={vbar.maximum()}\n")
+                        f.write(f"{datetime.datetime.now()}: restored scroll={target}"
+                                f" max={vbar.maximum()} source={source}\n")
                 except Exception:
                     pass
             elif retries > 0:
-                QTimer.singleShot(100, lambda: self._restore_scroll(target, retries - 1))
+                QTimer.singleShot(100, lambda: self._restore_scroll(
+                    target, retries - 1, source))
 
-    def _restore_char_position(self, pos: int, retries: int = 5) -> None:
+    def _restore_char_position(self, pos: int, retries: int = 5,
+                               source: str = "unknown") -> None:
         """用文档字符位置恢复滚动（带重试，不依赖排版进度）。
 
         相比 scrollbar 值，字符位置不受窗口大小、字体、排版完成度的影响，
@@ -915,17 +932,22 @@ class ReaderWindow(QWidget):
                 if vbar is not None:
                     adjusted = vbar.value() + rect.top()
                     vbar.setValue(max(0, min(adjusted, vbar.maximum())))
+            # 初始阅读状态恢复完成，允许 _apply_theme 后续正常 save-and-restore
+            if source == "restore_state":
+                self._reading_state_restored = True
             # 调试日志
             try:
                 with open(_state_path() + ".log", "a", encoding="utf-8") as f:
                     import datetime
                     vbar = self._text_widget.verticalScrollBar()
                     cur_scroll = vbar.value() if vbar else 0
-                    f.write(f"{datetime.datetime.now()}: restored char_pos={pos} scroll_now={cur_scroll}\n")
+                    f.write(f"{datetime.datetime.now()}: restored char_pos={pos}"
+                            f" scroll_now={cur_scroll} source={source}\n")
             except Exception:
                 pass
         elif retries > 0:
-            QTimer.singleShot(100, lambda: self._restore_char_position(pos, retries - 1))
+            QTimer.singleShot(100, lambda: self._restore_char_position(
+                pos, retries - 1, source))
 
     # ------------------------------------------------------------------
     # 外观设置
