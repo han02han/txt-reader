@@ -275,6 +275,9 @@ class ReaderWindow(QWidget):
         self._cached_first_visible_char: int = 0
         # 初始阅读状态恢复是否已完成（防止 _apply_theme 在恢复前保存错误位置）
         self._reading_state_restored: bool = False
+        # 标记 showEvent 安排的滚动恢复是否还未完成，
+        # 用于防止快速 show→hide 时 _save_reading_state 读取错误位置
+        self._show_restore_pending: bool = False
         # 从设置中读取或使用默认值
         s = QSettings("浮光", "浮光")
         self._font_family: str = s.value("appearance/font", "Microsoft YaHei")
@@ -717,23 +720,20 @@ class ReaderWindow(QWidget):
         self.activateWindow()
         # 恢复隐藏前保存的阅读位置（hide/show 可能导致 QTextEdit 丢失滚动位置）
         if self._cached_first_visible_char > 0 and self._text_widget is not None:
+            # 标记 show 恢复尚未完成，防止快速 show→hide 时
+            # _save_reading_state 读取错误位置（文本尚未滚动到目标位置）
+            self._show_restore_pending = True
+            target = self._cached_first_visible_char
             QTimer.singleShot(150, lambda: self._restore_char_position(
-                self._cached_first_visible_char, source="show_event"))
+                target, source="show_event"))
         # 窗口出现后再采样桌面背景，避免阻塞显示
         QTimer.singleShot(300, self._update_theme)
 
     def hideEvent(self, event) -> None:
-        """窗口已隐藏，通知托盘；保存阅读位置防止隐藏期间状态损坏。"""
-        # 在隐藏前立即保存当前阅读位置（隐藏后 cursorForPosition 可能返回错误值）
-        # 直接在这里获取位置，不依赖 isVisible()（hideEvent 时可能已为 False）
-        if self._file_path and self._text_widget is not None:
-            try:
-                cursor = self._text_widget.cursorForPosition(QPoint(0, 0))
-                pos = cursor.position()
-                if pos > 0:
-                    self._cached_first_visible_char = pos
-            except Exception:
-                pass
+        """窗口已隐藏，通知托盘；直接保存阅读状态。"""
+        # 不要在这里用 cursorForPosition 更新 _cached_first_visible_char：
+        # 快速 show→hide 时文本尚未恢复到正确位置，覆盖缓存会损坏状态。
+        # _save_reading_state 内部已有 _show_restore_pending 保护。
         self._save_reading_state()
         super().hideEvent(event)
         self.visibility_changed.emit(False)
@@ -795,9 +795,11 @@ class ReaderWindow(QWidget):
 
         # 保存视口第一个可见字符在文档中的位置（用于可靠恢复，
         # 不依赖窗口大小 / 字体 / 排版进度）
-        # 注意：窗口隐藏时 cursorForPosition 可能返回错误值，
-        # 此时使用缓存的位置（已在 hideEvent 中保存）
-        if self.isVisible():
+        #
+        # 重要：当 show_restore_pending 时，文本尚未滚动到目标位置，
+        # cursorForPosition 返回的是文档顶部的错误值。此时必须使用
+        # 缓存值（来自上一次窗口可见时的正确位置），否则会损坏状态文件。
+        if self.isVisible() and not self._show_restore_pending:
             cursor = self._text_widget.cursorForPosition(QPoint(0, 0))
             first_visible_char = cursor.position()
             if first_visible_char > 0:
@@ -915,6 +917,7 @@ class ReaderWindow(QWidget):
         确保目标字符精确位于视口顶部。
         """
         if self._text_widget is None:
+            self._show_restore_pending = False
             return
         doc = self._text_widget.document()
         # characterCount() 包含末尾段落分隔符，所以用 > 判断
@@ -935,6 +938,8 @@ class ReaderWindow(QWidget):
             # 初始阅读状态恢复完成，允许 _apply_theme 后续正常 save-and-restore
             if source == "restore_state":
                 self._reading_state_restored = True
+            # show 恢复完成，允许 _save_reading_state 重新读取实时位置
+            self._show_restore_pending = False
             # 调试日志
             try:
                 with open(_state_path() + ".log", "a", encoding="utf-8") as f:
@@ -948,6 +953,10 @@ class ReaderWindow(QWidget):
         elif retries > 0:
             QTimer.singleShot(100, lambda: self._restore_char_position(
                 pos, retries - 1, source))
+        else:
+            # 重试用尽仍无法恢复，清除待定标志避免 _save_reading_state
+            # 永远使用缓存值
+            self._show_restore_pending = False
 
     # ------------------------------------------------------------------
     # 外观设置
