@@ -807,12 +807,23 @@ class ReaderWindow(QWidget):
         else:
             first_visible_char = self._cached_first_visible_char
 
+        # 记录文件大小和修改时间，恢复时用于检测文件是否被替换
+        try:
+            file_stat = _os.stat(self._file_path)
+            file_size = file_stat.st_size
+            file_mtime = file_stat.st_mtime
+        except OSError:
+            file_size = 0
+            file_mtime = 0
+
         data = {
             "last_file": self._file_path,
             "scroll_pos": scroll_val,
             "scroll_max": scroll_max,
             "loaded_offset": self._current_offset,
             "first_visible_char": first_visible_char,
+            "file_size": file_size,
+            "file_mtime": file_mtime,
         }
         _save_state(data)
 
@@ -833,6 +844,18 @@ class ReaderWindow(QWidget):
         if not _os.path.exists(last_file):
             _save_state({})  # 文件已删除，清除记录
             return
+
+        # 检测文件是否被同名替换：比对文件大小。大小不同说明文件已换，
+        # 旧进度无意义，静默从开头开始（不弹窗打扰用户）
+        stored_size = data.get("file_size")
+        if stored_size is not None:
+            try:
+                current_size = _os.stat(last_file).st_size
+            except OSError:
+                current_size = -1
+            if current_size != stored_size:
+                _save_state({})
+                return
 
         # 优先使用字符位置恢复（不受窗口尺寸/字体/排版进度影响）；
         # 旧格式没有 first_visible_char，回退到 scroll_pos
