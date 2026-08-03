@@ -92,6 +92,80 @@ def _save_state(data: dict) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def _migrate_old_state(data: dict) -> dict:
+    """将旧格式（单文件扁平记录）迁移到新格式（多文件字典）。"""
+    if "files" in data:
+        return data  # 已是新格式，无需迁移
+    last_file = data.get("last_file")
+    if last_file and _os.path.exists(last_file):
+        return {
+            "last_file": last_file,
+            "files": {
+                last_file: {
+                    "scroll_pos": data.get("scroll_pos", 0),
+                    "scroll_max": data.get("scroll_max", 0),
+                    "loaded_offset": data.get("loaded_offset", 0),
+                    "first_visible_char": data.get("first_visible_char", 0),
+                    "file_size": data.get("file_size", 0),
+                    "file_mtime": data.get("file_mtime", 0),
+                }
+            }
+        }
+    return {"last_file": None, "files": {}}
+
+
+def _get_file_progress(file_path: str) -> dict | None:
+    """获取指定文件的阅读进度（自动迁移旧格式）。"""
+    data = _load_state()
+    if not data:
+        return None
+    if "files" not in data:
+        data = _migrate_old_state(data)
+        _save_state(data)  # 持久化迁移结果，下次读取直接走新格式
+    return data.get("files", {}).get(file_path)
+
+
+def _save_file_progress(file_path: str, progress: dict) -> None:
+    """保存指定文件的阅读进度（新格式）。"""
+    data = _load_state()
+    if "files" not in data:
+        data = _migrate_old_state(data)
+    data["last_file"] = file_path
+    data.setdefault("files", {})[file_path] = progress
+    _save_state(data)
+
+
+def _remove_file_progress(file_path: str) -> None:
+    """从状态文件中移除指定文件的进度记录。"""
+    data = _load_state()
+    if "files" not in data:
+        data = _migrate_old_state(data)
+    data.get("files", {}).pop(file_path, None)
+    if data.get("last_file") == file_path:
+        data["last_file"] = None
+    _save_state(data)
+
+
+def _cleanup_deleted_files() -> None:
+    """清理状态文件中已不存在的文件条目（启动时调用一次）。"""
+    data = _load_state()
+    if not data:
+        return
+    if "files" not in data:
+        data = _migrate_old_state(data)
+        _save_state(data)
+        return
+    files = data.get("files", {})
+    stale = [p for p in files if not _os.path.exists(p)]
+    if not stale:
+        return
+    for p in stale:
+        del files[p]
+    if data.get("last_file") in stale:
+        data["last_file"] = None
+    _save_state(data)
+
+
 # 可选字体列表
 _FONT_OPTIONS = [
     "Microsoft YaHei",
@@ -660,23 +734,42 @@ class ReaderWindow(QWidget):
         """加载并显示 TXT 文件。"""
         try:
             self._file_path = file_path
-            self._current_offset = 0
-            # 新文件直接从开头开始，不需要恢复，允许 _apply_theme 正常 save-and-restore
-            self._reading_state_restored = True
 
-            # 加载第一块
-            text, self._current_offset, self._has_more = load_file_chunked(
-                file_path, 0, CHUNK_SIZE
-            )
+            # 检查是否有该文件的阅读进度
+            progress = _get_file_progress(file_path)
+            if progress is not None:
+                # 检测文件是否被同名替换：比对文件大小
+                stored_size = progress.get("file_size")
+                if stored_size is not None:
+                    try:
+                        current_size = _os.stat(file_path).st_size
+                    except OSError:
+                        current_size = -1
+                    if current_size != stored_size:
+                        _remove_file_progress(file_path)
+                        progress = None
 
-            if self._text_widget is not None:
-                self._text_widget.setPlainText(text)
-                self._text_widget.moveCursor(QTextCursor.MoveOperation.Start)
+            if progress is not None:
+                # 恢复已有进度
+                self._restore_file_progress(file_path, progress)
+            else:
+                # 从头开始
+                self._current_offset = 0
+                # 新文件直接从开头开始，允许 _apply_theme 正常 save-and-restore
+                self._reading_state_restored = True
 
-            info = get_file_info(file_path)
-            self.setWindowTitle(f"浮光 — {info['name']}")
+                text, self._current_offset, self._has_more = load_file_chunked(
+                    file_path, 0, CHUNK_SIZE
+                )
 
-            self._save_timer.start()  # 开始定期保存阅读进度
+                if self._text_widget is not None:
+                    self._text_widget.setPlainText(text)
+                    self._text_widget.moveCursor(QTextCursor.MoveOperation.Start)
+
+                info = get_file_info(file_path)
+                self.setWindowTitle(f"浮光 — {info['name']}")
+
+                self._save_timer.start()  # 开始定期保存阅读进度
 
             if not self.isVisible():
                 self.show()
@@ -816,8 +909,7 @@ class ReaderWindow(QWidget):
             file_size = 0
             file_mtime = 0
 
-        data = {
-            "last_file": self._file_path,
+        progress = {
             "scroll_pos": scroll_val,
             "scroll_max": scroll_max,
             "loaded_offset": self._current_offset,
@@ -825,7 +917,7 @@ class ReaderWindow(QWidget):
             "file_size": file_size,
             "file_mtime": file_mtime,
         }
-        _save_state(data)
+        _save_file_progress(self._file_path, progress)
 
         # 调试日志
         try:
@@ -837,62 +929,72 @@ class ReaderWindow(QWidget):
 
     def _restore_reading_state(self) -> None:
         """从 JSON 文件恢复上次阅读的文件和滚动位置。"""
+        _cleanup_deleted_files()
         data = _load_state()
+        if "files" not in data:
+            data = _migrate_old_state(data)
+            _save_state(data)
+
         last_file = data.get("last_file")
         if not last_file:
             return
         if not _os.path.exists(last_file):
-            _save_state({})  # 文件已删除，清除记录
+            _remove_file_progress(last_file)
             return
 
-        # 检测文件是否被同名替换：比对文件大小。大小不同说明文件已换，
-        # 旧进度无意义，静默从开头开始（不弹窗打扰用户）
-        stored_size = data.get("file_size")
+        progress = data.get("files", {}).get(last_file)
+        if progress is None:
+            return
+
+        # 检测文件是否被同名替换：比对文件大小
+        stored_size = progress.get("file_size")
         if stored_size is not None:
             try:
                 current_size = _os.stat(last_file).st_size
             except OSError:
                 current_size = -1
             if current_size != stored_size:
-                _save_state({})
+                _remove_file_progress(last_file)
                 return
 
-        # 优先使用字符位置恢复（不受窗口尺寸/字体/排版进度影响）；
-        # 旧格式没有 first_visible_char，回退到 scroll_pos
-        target_char = data.get("first_visible_char")
+        # 记录当前文件路径，供 _save_reading_state 使用
+        self._file_path = last_file
+        self._restore_file_progress(last_file, progress)
+
+    def _restore_file_progress(self, file_path: str, progress: dict) -> None:
+        """用已有进度数据加载文件并恢复阅读位置。
+
+        被 _restore_reading_state（启动恢复）和 open_file（切换到已读过的文件）共用。
+        """
+        target_char = progress.get("first_visible_char")
         if target_char is not None and target_char > 0:
-            target_scroll = 0  # 用字符位置，不需要 scroll 回退
+            target_scroll = 0
         else:
             target_char = None
-            target_scroll = data.get("scroll_pos", 0)
+            target_scroll = progress.get("scroll_pos", 0)
 
-        self._file_path = last_file
         self._current_offset = 0
 
         text, self._current_offset, self._has_more = load_file_chunked(
-            last_file, 0, CHUNK_SIZE
+            file_path, 0, CHUNK_SIZE
         )
         if self._text_widget is not None:
             self._text_widget.setPlainText(text)
 
-        # 持续加载直到文本量覆盖目标恢复位置（字符位置或滚动位置）
         vbar = self._text_widget.verticalScrollBar() if self._text_widget else None
         while self._has_more and self._text_widget is not None:
-            # 新格式：字符数够覆盖 target_char 就停
             if target_char is not None and self._text_widget.document().characterCount() > target_char:
                 break
-            # 旧格式：滚动条最大值够覆盖 target_scroll 就停
             if target_char is None and vbar and vbar.maximum() >= target_scroll:
                 break
             text, self._current_offset, self._has_more = load_file_chunked(
-                last_file, self._current_offset, CHUNK_SIZE
+                file_path, self._current_offset, CHUNK_SIZE
             )
             if text:
                 cursor = self._text_widget.textCursor()
                 cursor.movePosition(QTextCursor.MoveOperation.End)
                 cursor.insertText(text)
 
-        # 恢复滚动位置（延迟等文字排版完成）
         if target_char is not None and target_char > 0:
             QTimer.singleShot(100, lambda: self._restore_char_position(
                 target_char, source="restore_state"))
@@ -900,7 +1002,7 @@ class ReaderWindow(QWidget):
             QTimer.singleShot(100, lambda: self._restore_scroll(
                 target_scroll, source="restore_state"))
 
-        info = get_file_info(last_file)
+        info = get_file_info(file_path)
         self.setWindowTitle(f"浮光 — {info['name']}")
         self._save_timer.start()
 
