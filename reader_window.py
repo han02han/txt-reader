@@ -352,6 +352,10 @@ class ReaderWindow(QWidget):
         # 标记 showEvent 安排的滚动恢复是否还未完成，
         # 用于防止快速 show→hide 时 _save_reading_state 读取错误位置
         self._show_restore_pending: bool = False
+        # 标记 _apply_theme 安排的滚动恢复是否还未执行。
+        # 若上一次 _apply_theme 的 setStyleSheet 已重置滚动条而恢复还没跑，
+        # 此时 cursorForPosition 会读到被重置后的错误位置，必须改用缓存值。
+        self._theme_restore_pending: int | None = None
         # 从设置中读取或使用默认值
         s = QSettings("浮光", "浮光")
         self._font_family: str = s.value("appearance/font", "Microsoft YaHei")
@@ -672,11 +676,20 @@ class ReaderWindow(QWidget):
         """
         t = _LIGHT_THEME if self._is_light_bg else _DARK_THEME
 
-        # 保存当前视口第一个可见字符位置（setStyleSheet 可能重置滚动）
-        saved_char: int = 0
-        if self._text_widget is not None:
+        # 保存当前视口第一个可见字符位置（setStyleSheet 可能重置滚动）。
+        #
+        # 关键：不能每次都实时读取 cursorForPosition。若上一次 _apply_theme
+        # 刚执行过 setStyleSheet（滚动条已被重置、恢复还没运行），或者正处在
+        # show / 文件切换的恢复窗口内，实时读取会拿到错误位置并覆盖正确进度。
+        # 因此仅在没有待定恢复、滚动条稳定时才刷新缓存，否则直接用最近一次缓存值。
+        if (self._text_widget is not None
+                and self._reading_state_restored
+                and not self._show_restore_pending
+                and self._theme_restore_pending is None):
             cursor = self._text_widget.cursorForPosition(QPoint(0, 0))
-            saved_char = cursor.position()
+            if cursor.position() > 0:
+                self._cached_first_visible_char = cursor.position()
+        saved_char = self._cached_first_visible_char
 
         if self._container is not None:
             self._container.setStyleSheet(f"""
@@ -704,6 +717,7 @@ class ReaderWindow(QWidget):
         # 如果初始阅读状态还未恢复完成，跳过 save-and-restore，
         # 避免 _apply_theme 保存到错误位置后覆盖 _restore_reading_state 的正确恢复。
         if saved_char > 0 and self._text_widget is not None and self._reading_state_restored:
+            self._theme_restore_pending = saved_char
             QTimer.singleShot(50, lambda: self._restore_char_position(
                 saved_char, source="apply_theme"))
 
@@ -757,6 +771,8 @@ class ReaderWindow(QWidget):
                 self._current_offset = 0
                 # 新文件直接从开头开始，允许 _apply_theme 正常 save-and-restore
                 self._reading_state_restored = True
+                # 新文件从顶部开始，清空位置缓存，避免 showEvent 用旧文件位置恢复
+                self._cached_first_visible_char = 0
 
                 text, self._current_offset, self._has_more = load_file_chunked(
                     file_path, 0, CHUNK_SIZE
@@ -879,6 +895,10 @@ class ReaderWindow(QWidget):
         """保存当前文件路径和滚动位置到 JSON 文件。"""
         if not self._file_path or self._text_widget is None:
             return
+        # 初始恢复 / 文件切换恢复尚未完成时，视口可能还在顶部，
+        # 此时保存会写入错误位置，直接跳过（恢复完成后定时器会补上）。
+        if not self._reading_state_restored:
+            return
         vbar = self._text_widget.verticalScrollBar()
         if vbar is None:
             return
@@ -889,10 +909,12 @@ class ReaderWindow(QWidget):
         # 保存视口第一个可见字符在文档中的位置（用于可靠恢复，
         # 不依赖窗口大小 / 字体 / 排版进度）
         #
-        # 重要：当 show_restore_pending 时，文本尚未滚动到目标位置，
-        # cursorForPosition 返回的是文档顶部的错误值。此时必须使用
-        # 缓存值（来自上一次窗口可见时的正确位置），否则会损坏状态文件。
-        if self.isVisible() and not self._show_restore_pending:
+        # 重要：当 show_restore_pending 或 theme_restore_pending 时，
+        # 文本尚未滚动到目标位置（滚动条可能已被 setStyleSheet 重置），
+        # cursorForPosition 返回的是错误值。此时必须使用缓存值
+        # （来自上一次滚动条稳定时的正确位置），否则会损坏状态文件。
+        if (self.isVisible() and not self._show_restore_pending
+                and self._theme_restore_pending is None):
             cursor = self._text_widget.cursorForPosition(QPoint(0, 0))
             first_visible_char = cursor.position()
             if first_visible_char > 0:
@@ -966,12 +988,22 @@ class ReaderWindow(QWidget):
 
         被 _restore_reading_state（启动恢复）和 open_file（切换到已读过的文件）共用。
         """
+        # 恢复完成前禁止实时读取/覆盖位置：恢复有 100ms 的窗口期，
+        # 期间滚动条还在顶部，若 _apply_theme 或保存定时器读实时位置，
+        # 会把新文件顶部的错误位置写回状态文件。
+        self._reading_state_restored = False
+        self._theme_restore_pending = None
+
         target_char = progress.get("first_visible_char")
         if target_char is not None and target_char > 0:
             target_scroll = 0
         else:
             target_char = None
             target_scroll = progress.get("scroll_pos", 0)
+
+        # 用本文件的恢复目标更新位置缓存，保证 showEvent 等后续恢复
+        # 用本文件的位置，而不是上一个文件的残留值。
+        self._cached_first_visible_char = target_char if target_char and target_char > 0 else 0
 
         self._current_offset = 0
 
@@ -1032,6 +1064,9 @@ class ReaderWindow(QWidget):
             elif retries > 0:
                 QTimer.singleShot(100, lambda: self._restore_scroll(
                     target, retries - 1, source))
+            elif source == "restore_state":
+                # 重试用尽仍无法恢复：视为恢复完成，让保存/主题切换恢复正常
+                self._reading_state_restored = True
 
     def _restore_char_position(self, pos: int, retries: int = 5,
                                source: str = "unknown") -> None:
@@ -1043,6 +1078,7 @@ class ReaderWindow(QWidget):
         """
         if self._text_widget is None:
             self._show_restore_pending = False
+            self._theme_restore_pending = None
             return
         doc = self._text_widget.document()
         # characterCount() 包含末尾段落分隔符，所以用 > 判断
@@ -1065,6 +1101,7 @@ class ReaderWindow(QWidget):
                 self._reading_state_restored = True
             # show 恢复完成，允许 _save_reading_state 重新读取实时位置
             self._show_restore_pending = False
+            self._theme_restore_pending = None
             # 调试日志
             try:
                 with open(_state_path() + ".log", "a", encoding="utf-8") as f:
@@ -1079,9 +1116,12 @@ class ReaderWindow(QWidget):
             QTimer.singleShot(100, lambda: self._restore_char_position(
                 pos, retries - 1, source))
         else:
-            # 重试用尽仍无法恢复，清除待定标志避免 _save_reading_state
-            # 永远使用缓存值
+            # 重试用尽仍无法恢复：清除待定标志，避免 _save_reading_state
+            # 永远使用缓存值；并视为恢复完成，让后续保存/主题切换恢复正常。
             self._show_restore_pending = False
+            self._theme_restore_pending = None
+            if source == "restore_state":
+                self._reading_state_restored = True
 
     # ------------------------------------------------------------------
     # 外观设置
