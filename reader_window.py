@@ -88,8 +88,21 @@ def _load_state() -> dict:
 
 
 def _save_state(data: dict) -> None:
-    with open(_state_path(), "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    """原子写入状态文件：先写临时文件再 os.replace，避免多进程并发写
+    或写入中途崩溃导致 JSON 文件撕裂损坏（进度一起丢失）。"""
+    path = _state_path()
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        _os.replace(tmp, path)
+    except OSError:
+        # 目标被其它进程占用等情况下退化为直接写入，避免进度完全丢失
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
 
 
 def _migrate_old_state(data: dict) -> dict:
