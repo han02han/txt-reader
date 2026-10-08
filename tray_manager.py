@@ -88,10 +88,13 @@ class TrayManager(QSystemTrayIcon):
     # ------------------------------------------------------------------
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        """托盘图标点击事件。"""
+        """托盘图标点击事件。
+
+        只响应 Trigger：Windows 上双击会先产生 Trigger 再产生 DoubleClick，
+        若两者都处理会切换两次（显示又隐藏），双击看起来"没反应"。
+        忽略 DoubleClick 后，双击 = 第一次点击生效、第二次被忽略。
+        """
         if reason == QSystemTrayIcon.ActivationReason.Trigger:  # 左键单击
-            self._on_toggle()
-        elif reason == QSystemTrayIcon.ActivationReason.DoubleClick:  # 左键双击
             self._on_toggle()
 
     def _on_toggle(self) -> None:

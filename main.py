@@ -103,12 +103,16 @@ def _acquire_single_instance() -> bool:
     原子原语，保证同一名字同一时刻只有一个进程能成功持有。
     """
     global _MUTEX_HANDLE
-    kernel32 = ctypes.windll.kernel32
+    # use_last_error=True：ctypes 会把线程 last-error 保存在内部，
+    # 防止 Python 层中间的 API 调用覆盖它导致误读（windll 直接调
+    # GetLastError 不保证拿到 CreateMutexW 的结果）
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.CreateMutexW.restype = wintypes.HANDLE
+    kernel32.SetLastError(0)  # 清掉启动期残留错误码，防止误读 ERROR_ALREADY_EXISTS
     handle = kernel32.CreateMutexW(None, False, _MUTEX_NAME)
     if not handle:
         return False
-    if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
         kernel32.CloseHandle(handle)
         return False
     _MUTEX_HANDLE = handle  # 进程存活期间一直持有，进程退出时由内核释放

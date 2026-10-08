@@ -699,9 +699,9 @@ class ReaderWindow(QWidget):
                 and self._reading_state_restored
                 and not self._show_restore_pending
                 and self._theme_restore_pending is None):
-            cursor = self._text_widget.cursorForPosition(QPoint(0, 0))
-            if cursor.position() > 0:
-                self._cached_first_visible_char = cursor.position()
+            # 0 是合法位置（文件顶部）；错误的实时读取已被上面的标志挡住
+            self._cached_first_visible_char = \
+                self._text_widget.cursorForPosition(QPoint(0, 0)).position()
         saved_char = self._cached_first_visible_char
 
         if self._container is not None:
@@ -930,8 +930,10 @@ class ReaderWindow(QWidget):
                 and self._theme_restore_pending is None):
             cursor = self._text_widget.cursorForPosition(QPoint(0, 0))
             first_visible_char = cursor.position()
-            if first_visible_char > 0:
-                self._cached_first_visible_char = first_visible_char
+            # 0 是合法位置（文件顶部）。错误的实时读取已被上面的待定恢复
+            # 标志挡住，不能再用 >0 过滤，否则滚回顶部后缓存残留旧值，
+            # hide 时写坏状态文件、show 时跳回旧位置
+            self._cached_first_visible_char = first_visible_char
         else:
             first_visible_char = self._cached_first_visible_char
 
@@ -953,14 +955,6 @@ class ReaderWindow(QWidget):
             "file_mtime": file_mtime,
         }
         _save_file_progress(self._file_path, progress)
-
-        # 调试日志
-        try:
-            with open(_state_path() + ".log", "a", encoding="utf-8") as f:
-                import datetime
-                f.write(f"{datetime.datetime.now()}: saved scroll={scroll_val} max={scroll_max} char={first_visible_char}\n")
-        except Exception:
-            pass
 
     def _restore_reading_state(self) -> None:
         """从 JSON 文件恢复上次阅读的文件和滚动位置。"""
@@ -1046,6 +1040,11 @@ class ReaderWindow(QWidget):
         elif target_scroll > 0:
             QTimer.singleShot(100, lambda: self._restore_scroll(
                 target_scroll, source="restore_state"))
+        else:
+            # 进度就在文件顶部(0)，无需恢复，直接标记完成；
+            # 否则 _reading_state_restored 永远为 False，
+            # _save_reading_state 会整会话跳过，本次阅读进度全部丢失
+            self._reading_state_restored = True
 
         info = get_file_info(file_path)
         self.setWindowTitle(f"浮光 — {info['name']}")
@@ -1066,14 +1065,6 @@ class ReaderWindow(QWidget):
                 # 初始阅读状态恢复完成
                 if source == "restore_state":
                     self._reading_state_restored = True
-                # 调试日志
-                try:
-                    with open(_state_path() + ".log", "a", encoding="utf-8") as f:
-                        import datetime
-                        f.write(f"{datetime.datetime.now()}: restored scroll={target}"
-                                f" max={vbar.maximum()} source={source}\n")
-                except Exception:
-                    pass
             elif retries > 0:
                 QTimer.singleShot(100, lambda: self._restore_scroll(
                     target, retries - 1, source))
@@ -1115,16 +1106,6 @@ class ReaderWindow(QWidget):
             # show 恢复完成，允许 _save_reading_state 重新读取实时位置
             self._show_restore_pending = False
             self._theme_restore_pending = None
-            # 调试日志
-            try:
-                with open(_state_path() + ".log", "a", encoding="utf-8") as f:
-                    import datetime
-                    vbar = self._text_widget.verticalScrollBar()
-                    cur_scroll = vbar.value() if vbar else 0
-                    f.write(f"{datetime.datetime.now()}: restored char_pos={pos}"
-                            f" scroll_now={cur_scroll} source={source}\n")
-            except Exception:
-                pass
         elif retries > 0:
             QTimer.singleShot(100, lambda: self._restore_char_position(
                 pos, retries - 1, source))
